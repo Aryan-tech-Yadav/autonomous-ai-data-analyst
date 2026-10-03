@@ -8,3 +8,10 @@ reports/
 *.log
 .DS_Store
 
+
+# Local backup files
+*.bak
+*.backup
+
+src/agent/llm_planner.py.bak2
+src/agent/plan_adapter.py0
