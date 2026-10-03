@@ -15,3 +15,4 @@ reports/
 
 src/agent/llm_planner.py.bak2
 src/agent/plan_adapter.py0
+src/agent/pipeline.py.backup

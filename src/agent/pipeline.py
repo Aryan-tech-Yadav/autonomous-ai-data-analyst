@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 import pandas as pd
 
+from src.agent.plan_repair import repair_plan
 from src.agent.context import build_agent_context
 from src.agent.llm_planner import LLMPlanner
 from src.agent.plan_adapter import adapt_plan
@@ -960,24 +961,76 @@ class AnalysisPipeline:
             context=context,
         )
 
+        # ==================================================
+        # Plan Repair
+        # ==================================================
+
+        repair_result = None
+
         if not validation["valid"]:
 
-            return {
-                "status": "validation_failed",
-                "profile": profile,
-                "schema": schema,
-                "context": context,
-                "raw_plan": raw_plan,
-                "plan": plan,
-                "validation": validation,
-                "adapted_plan": None,
-                "execution": None,
-                "final_response": None,
-                "error": (
-                    "LLM-generated plan failed "
-                    "validation."
-                ),
-            }
+            repair_result = repair_plan(
+                plan=plan,
+                validation_result=validation,
+                context=context,
+            )
+
+            if repair_result["repaired"]:
+
+                repaired_plan = repair_result["plan"]
+
+                repaired_validation = validate_plan(
+                    plan=repaired_plan,
+                    context=context,
+                )
+
+                if repaired_validation["valid"]:
+
+                    plan = repaired_plan
+                    validation = repaired_validation
+
+                else:
+
+                    return {
+                        "status": "validation_failed",
+                        "profile": profile,
+                        "schema": schema,
+                        "context": context,
+                        "raw_plan": raw_plan,
+                        "plan": repaired_plan,
+                        "validation": repaired_validation,
+                        "repair": repair_result,
+                        "adapted_plan": None,
+                        "execution": None,
+                        "final_response": None,
+                        "error": (
+                            "LLM-generated plan failed "
+                            "validation and automatic "
+                            "repair could not produce "
+                            "a valid plan."
+                        ),
+                    }
+
+            else:
+
+                return {
+                    "status": "validation_failed",
+                    "profile": profile,
+                    "schema": schema,
+                    "context": context,
+                    "raw_plan": raw_plan,
+                    "plan": plan,
+                    "validation": validation,
+                    "repair": repair_result,
+                    "adapted_plan": None,
+                    "execution": None,
+                    "final_response": None,
+                    "error": (
+                        "LLM-generated plan failed "
+                        "validation and no automatic "
+                        "repair was possible."
+                    ),
+                }
 
         # ==================================================
         # Adapter
