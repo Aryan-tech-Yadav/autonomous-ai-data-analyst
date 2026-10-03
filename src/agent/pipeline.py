@@ -13,6 +13,7 @@ from src.agent.response_generator import ResponseGenerator
 from src.data.profiler import profile_dataset
 from src.data.schema import build_schema
 from src.execution.operation_executor import OperationExecutor
+from src.execution.execution_recovery import recover_execution_error
 
 
 class AnalysisPipeline:
@@ -1064,7 +1065,7 @@ class AnalysisPipeline:
                 ),
             }
 
-        # ==================================================
+	        # ==================================================
         # Execution
         # ==================================================
 
@@ -1076,6 +1077,48 @@ class AnalysisPipeline:
                 ]
             ),
         )
+
+        # ==================================================
+        # Execution Recovery
+        # ==================================================
+
+        recovery = None
+        retry_performed = False
+
+        if execution["status"] in {
+            "partial",
+            "failed",
+        }:
+
+            recovery = recover_execution_error(
+                execution_result=execution,
+                execution_plan=adapted_plan,
+                context=context,
+            )
+
+            if recovery["recoverable"]:
+
+                retry_performed = True
+
+                repaired_plan = recovery[
+                    "repaired_plan"
+                ]
+
+                retry_steps = repaired_plan.get(
+                    "execution_steps",
+                    [],
+                )
+
+                execution = self.executor.execute(
+                    df=df,
+                    execution_steps=retry_steps,
+                )
+
+                adapted_plan = repaired_plan
+
+        # ==================================================
+        # Final Execution Status
+        # ==================================================
 
         if execution["status"] == "failed":
 
@@ -1089,12 +1132,77 @@ class AnalysisPipeline:
                 "validation": validation,
                 "adapted_plan": adapted_plan,
                 "execution": execution,
+                "recovery": recovery,
+                "retry_performed": retry_performed,
                 "final_response": None,
                 "error": (
+                    "Analysis execution failed "
+                    "after automatic recovery retry."
+                    if retry_performed
+                    else
                     "Analysis execution failed."
                 ),
             }
 
+        # ==================================================
+        # Final response
+        # ==================================================
+
+        try:
+
+            final_response = (
+                self.response_generator.generate(
+                    user_query=user_query,
+                    execution_results=execution,
+                )
+            )
+
+        except Exception as e:
+
+            return {
+                "status": "response_error",
+                "profile": profile,
+                "schema": schema,
+                "context": context,
+                "raw_plan": raw_plan,
+                "plan": plan,
+                "validation": validation,
+                "adapted_plan": adapted_plan,
+                "execution": execution,
+                "recovery": recovery,
+                "retry_performed": retry_performed,
+                "final_response": None,
+                "error": (
+                    "Failed to generate final "
+                    f"response: {str(e)}"
+                ),
+            }
+
+        # ==================================================
+        # Pipeline Status
+        # ==================================================
+
+        if execution["status"] == "partial":
+            status = "partial_success"
+        else:
+            status = "success"
+
+        return {
+            "status": status,
+            "profile": profile,
+            "schema": schema,
+            "context": context,
+            "raw_plan": raw_plan,
+            "plan": plan,
+            "validation": validation,
+            "adapted_plan": adapted_plan,
+            "execution": execution,
+            "recovery": recovery,
+            "retry_performed": retry_performed,
+            "final_response": final_response,
+            "error": None,
+        }
+	
         # ==================================================
         # Final response
         # ==================================================
