@@ -10,6 +10,7 @@ from src.agent.llm_planner import LLMPlanner
 from src.agent.plan_adapter import adapt_plan
 from src.agent.plan_validator import validate_plan
 from src.agent.response_generator import ResponseGenerator
+from src.agent.insight_detector import InsightDetector
 from src.data.profiler import profile_dataset
 from src.data.schema import build_schema
 from src.execution.operation_executor import OperationExecutor
@@ -32,6 +33,8 @@ class AnalysisPipeline:
         )
 
         self.executor = OperationExecutor()
+
+        self.insight_detector = InsightDetector()
 
         self.response_generator = (
             ResponseGenerator(
@@ -1158,6 +1161,14 @@ class AnalysisPipeline:
             }
 
         # ==================================================
+        # Business Insights
+        # ==================================================
+
+        insights = self.insight_detector.detect(
+            execution_results=execution,
+        )
+
+        # ==================================================
         # Final response
         # ==================================================
 
@@ -1168,21 +1179,46 @@ class AnalysisPipeline:
                     self.response_generator.generate(
                         user_query=user_query,
                         execution_results=execution,
+                        insights=insights,
                         conversation_history=conversation_history,
                     )
                 )
             except TypeError as response_type_error:
                 # Backward compatibility for test/fake response generators
-                # that still implement the older two-argument interface.
-                if "conversation_history" not in str(response_type_error):
-                    raise
+                # that still implement older interfaces.
+                error_text = str(response_type_error)
 
-                final_response = (
-                    self.response_generator.generate(
-                        user_query=user_query,
-                        execution_results=execution,
+                if "insights" in error_text:
+                    try:
+                        final_response = (
+                            self.response_generator.generate(
+                                user_query=user_query,
+                                execution_results=execution,
+                                conversation_history=conversation_history,
+                            )
+                        )
+                    except TypeError as conversation_type_error:
+                        if "conversation_history" not in str(
+                            conversation_type_error
+                        ):
+                            raise
+
+                        final_response = (
+                            self.response_generator.generate(
+                                user_query=user_query,
+                                execution_results=execution,
+                            )
+                        )
+
+                elif "conversation_history" in error_text:
+                    final_response = (
+                        self.response_generator.generate(
+                            user_query=user_query,
+                            execution_results=execution,
+                        )
                     )
-                )
+                else:
+                    raise
 
         except Exception as e:
 
@@ -1226,6 +1262,7 @@ class AnalysisPipeline:
             "execution": execution,
             "recovery": recovery,
             "retry_performed": retry_performed,
+            "insights": insights,
             "final_response": final_response,
             "error": None,
         }

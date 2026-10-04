@@ -29,6 +29,7 @@ class ResponseGenerator:
         self,
         user_query: str,
         execution_results: Dict[str, Any],
+        insights: list[dict] | None = None,
         conversation_history: list[dict] | None = None,
     ) -> str:
         """
@@ -40,6 +41,10 @@ class ResponseGenerator:
 
         safe_results = self._sanitize(
             execution_results
+        )
+
+        safe_insights = self._sanitize(
+            insights or []
         )
 
         has_analysis_results = bool(
@@ -224,6 +229,15 @@ EXECUTED ANALYSIS RESULTS:
 )}
 
 
+VERIFIED BUSINESS INSIGHTS:
+
+{json.dumps(
+    safe_insights,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+
 Use the previous conversation history to resolve
 references such as "it", "its", "that", "those",
 "previous", and "earlier".
@@ -274,6 +288,7 @@ Write ONLY the final natural-language answer.
         return self._deterministic_fallback(
             user_query=user_query,
             execution_results=safe_results,
+            insights=safe_insights,
         )
 
     # ==========================================================
@@ -375,6 +390,7 @@ Write ONLY the final natural-language answer.
         self,
         user_query: str,
         execution_results: Dict[str, Any],
+        insights: list[dict] | None = None,
     ) -> str:
         """
         Produce a useful deterministic answer when
@@ -420,6 +436,36 @@ Write ONLY the final natural-language answer.
             )
 
         sections = []
+
+        # ------------------------------------------------------
+        # Verified business insights
+        # ------------------------------------------------------
+
+        if isinstance(insights, list):
+
+            for insight in insights:
+
+                if not isinstance(insight, dict):
+                    continue
+
+                statement = insight.get(
+                    "statement"
+                )
+
+                if not statement:
+                    statement = insight.get(
+                        "message"
+                    )
+
+                if not statement:
+                    statement = insight.get(
+                        "insight"
+                    )
+
+                if statement:
+                    sections.append(
+                        str(statement)
+                    )
 
         # ------------------------------------------------------
         # Revenue calculation

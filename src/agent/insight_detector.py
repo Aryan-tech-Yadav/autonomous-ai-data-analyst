@@ -159,43 +159,39 @@ class InsightDetector:
         self,
         result: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """
+        Convert rank_by_value results into deterministic
+        business insights.
 
-        ranking = result.get(
+        The executor's `ascending` flag is authoritative:
+
+        ascending=False -> highest-first ranking
+        ascending=True  -> lowest-first ranking
+        """
+
+        rows = result.get(
             "results",
             [],
         )
 
-        if not isinstance(
-            ranking,
-            list,
-        ) or not ranking:
+        if not isinstance(rows, list):
             return []
 
         valid = []
 
-        for item in ranking:
+        for item in rows:
 
-            if not isinstance(
-                item,
-                dict,
-            ):
+            if not isinstance(item, dict):
                 continue
 
-            group = item.get(
-                "group"
-            )
-
-            value = item.get(
-                "value"
-            )
+            group = item.get("group")
+            value = item.get("value")
 
             if group is None or value is None:
                 continue
 
             try:
-                numeric_value = float(
-                    value
-                )
+                numeric_value = float(value)
             except (
                 TypeError,
                 ValueError,
@@ -204,36 +200,48 @@ class InsightDetector:
 
             valid.append(
                 {
+                    "rank": item.get("rank"),
                     "group": str(group),
                     "value": numeric_value,
-                    "rank": item.get(
-                        "rank"
-                    ),
                 }
             )
 
         if not valid:
             return []
 
-        # Do not assume the incoming list order.
-        # Ranking metadata determines highest/lowest when present.
-        valid.sort(
-            key=lambda item: (
-                item["rank"]
-                if isinstance(
-                    item.get("rank"),
-                    int,
-                )
-                else float("inf")
+        # ------------------------------------------------------
+        # Lowest-first ranking
+        # ------------------------------------------------------
+
+        ascending = bool(
+            result.get(
+                "ascending",
+                False,
             )
         )
 
-        highest = valid[0]
+        if ascending:
 
-        # For the normal descending ranking produced by our
-        # rank_by_value operation, the final ranked item is
-        # the lowest performer.
-        lowest = valid[-1]
+            lowest = valid[0]
+
+            return [
+                {
+                    "type": "lowest_performer",
+                    "operation": "rank_by_value",
+                    "message": (
+                        f"{lowest['group']} ranks lowest with "
+                        f"{lowest['value']:,.2f}."
+                    ),
+                    "group": lowest["group"],
+                    "value": lowest["value"],
+                }
+            ]
+
+        # ------------------------------------------------------
+        # Highest-first ranking
+        # ------------------------------------------------------
+
+        highest = valid[0]
 
         insights = [
             {
@@ -248,40 +256,47 @@ class InsightDetector:
             }
         ]
 
-        if len(valid) > 1:
+        # A single top-N result only establishes the highest
+        # performer. Do not invent a lowest performer.
+        if len(valid) <= 1:
+            return insights
 
-            insights.append(
-                {
-                    "type": "lowest_performer",
-                    "operation": "rank_by_value",
-                    "message": (
-                        f"{lowest['group']} ranks lowest with "
-                        f"{lowest['value']:,.2f}."
-                    ),
-                    "group": lowest["group"],
-                    "value": lowest["value"],
-                }
-            )
+        # A complete descending ranking establishes both
+        # highest and lowest performers.
+        lowest = valid[-1]
 
-            gap = (
-                highest["value"]
-                - lowest["value"]
-            )
+        insights.append(
+            {
+                "type": "lowest_performer",
+                "operation": "rank_by_value",
+                "message": (
+                    f"{lowest['group']} ranks lowest with "
+                    f"{lowest['value']:,.2f}."
+                ),
+                "group": lowest["group"],
+                "value": lowest["value"],
+            }
+        )
 
-            insights.append(
-                {
-                    "type": "performance_gap",
-                    "operation": "rank_by_value",
-                    "message": (
-                        "The gap between the highest and "
-                        "lowest performers is "
-                        f"{gap:,.2f}."
-                    ),
-                    "highest_group": highest["group"],
-                    "lowest_group": lowest["group"],
-                    "gap": gap,
-                }
-            )
+        gap = (
+            highest["value"]
+            - lowest["value"]
+        )
+
+        insights.append(
+            {
+                "type": "performance_gap",
+                "operation": "rank_by_value",
+                "message": (
+                    "The gap between the highest and "
+                    "lowest performers is "
+                    f"{gap:,.2f}."
+                ),
+                "highest_group": highest["group"],
+                "lowest_group": lowest["group"],
+                "gap": gap,
+            }
+        )
 
         return insights
 

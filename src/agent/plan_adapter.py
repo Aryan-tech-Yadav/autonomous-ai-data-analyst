@@ -166,16 +166,63 @@ def _adapt_revenue_parameters(
     parameters: dict[str, Any],
     available_columns: list[str],
 ) -> dict[str, Any]:
+    """
+    Normalize revenue-calculation parameters.
+
+    The LLM may omit revenue parameters entirely or use
+    different parameter names. Revenue calculation has a
+    deterministic schema, so infer the required columns
+    from the available dataset columns when possible.
+    """
+
+    parameters = parameters or {}
+
+    # ------------------------------------------------------
+    # Units / quantity column
+    # ------------------------------------------------------
+
     units_column = parameters.get(
         "units_column",
         parameters.get(
             "units_sold_column",
             parameters.get(
                 "quantity_column",
-                parameters.get("quantity"),
+                parameters.get(
+                    "quantity",
+                    parameters.get("units"),
+                ),
             ),
         ),
     )
+
+    if units_column is None:
+        units_candidates = [
+            "Units Sold",
+            "Units",
+            "Quantity",
+            "Qty",
+            "Units_Sold",
+            "units_sold",
+            "quantity",
+        ]
+
+        available_lookup = {
+            str(column).strip().lower(): column
+            for column in available_columns
+        }
+
+        for candidate in units_candidates:
+            match = available_lookup.get(
+                candidate.strip().lower()
+            )
+
+            if match is not None:
+                units_column = match
+                break
+
+    # ------------------------------------------------------
+    # Unit price column
+    # ------------------------------------------------------
 
     price_column = parameters.get(
         "price_column",
@@ -188,13 +235,31 @@ def _adapt_revenue_parameters(
         ),
     )
 
-    output_column = parameters.get(
-        "output_column",
-        parameters.get(
-            "target_column",
-            "Revenue",
-        ),
-    )
+    if price_column is None:
+        price_candidates = [
+            "Unit Price",
+            "Price",
+            "Unit_Price",
+            "unit_price",
+        ]
+
+        available_lookup = {
+            str(column).strip().lower(): column
+            for column in available_columns
+        }
+
+        for candidate in price_candidates:
+            match = available_lookup.get(
+                candidate.strip().lower()
+            )
+
+            if match is not None:
+                price_column = match
+                break
+
+    # ------------------------------------------------------
+    # Validate resolved source columns
+    # ------------------------------------------------------
 
     units_column = _find_column(
         units_column,
@@ -205,6 +270,12 @@ def _adapt_revenue_parameters(
         price_column,
         available_columns,
     )
+
+    # ------------------------------------------------------
+    # Revenue must use the canonical derived column.
+    # ------------------------------------------------------
+
+    output_column = "Revenue"
 
     return {
         "units_column": units_column,
