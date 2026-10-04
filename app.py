@@ -18,15 +18,332 @@ st.set_page_config(
 
 
 # ============================================================
+# SESSION STATE
+# ============================================================
+
+if "dataset" not in st.session_state:
+    st.session_state.dataset = None
+
+if "dataset_name" not in st.session_state:
+    st.session_state.dataset_name = None
+
+if "conversation" not in st.session_state:
+    st.session_state.conversation = []
+
+if "analysis_count" not in st.session_state:
+    st.session_state.analysis_count = 0
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def load_uploaded_file(uploaded_file):
+    """
+    Load CSV or Excel file into a DataFrame.
+    """
+
+    if uploaded_file.name.lower().endswith(".csv"):
+
+        return pd.read_csv(uploaded_file)
+
+    return pd.read_excel(uploaded_file)
+
+
+def extract_chart_paths(result):
+    """
+    Extract generated chart paths from pipeline execution.
+    """
+
+    execution = result.get(
+        "execution",
+        {},
+    )
+
+    execution_results = execution.get(
+        "results",
+        [],
+    )
+
+    chart_paths = []
+
+    for execution_result in execution_results:
+
+        if execution_result.get(
+            "status"
+        ) != "success":
+
+            continue
+
+        operation = execution_result.get(
+            "operation"
+        )
+
+        if operation not in {
+            "generate_bar_chart",
+            "generate_line_chart",
+        }:
+
+            continue
+
+        operation_result = (
+            execution_result.get(
+                "result",
+                {},
+            )
+        )
+
+        output_path = (
+            operation_result.get(
+                "output_path"
+            )
+        )
+
+        if output_path:
+
+            chart_paths.append(
+                output_path
+            )
+
+    return chart_paths
+
+
+def render_execution_summary(result):
+    """
+    Render compact execution summary.
+    """
+
+    execution = result.get(
+        "execution",
+        {},
+    )
+
+    execution_results = execution.get(
+        "results",
+        [],
+    )
+
+    if not execution_results:
+        return
+
+    successful_steps = sum(
+        1
+        for item in execution_results
+        if item.get("status") == "success"
+    )
+
+    failed_steps = sum(
+        1
+        for item in execution_results
+        if item.get("status") != "success"
+    )
+
+    summary_1, summary_2, summary_3 = st.columns(3)
+
+    with summary_1:
+
+        st.metric(
+            "Operations",
+            len(execution_results),
+        )
+
+    with summary_2:
+
+        st.metric(
+            "Successful",
+            successful_steps,
+        )
+
+    with summary_3:
+
+        st.metric(
+            "Failed",
+            failed_steps,
+        )
+
+
+def render_charts(chart_paths):
+    """
+    Render generated charts.
+    """
+
+    if not chart_paths:
+        return
+
+    st.markdown("#### 📊 Visualization")
+
+    for index, chart_path in enumerate(
+        chart_paths,
+        start=1,
+    ):
+
+        path = Path(
+            chart_path
+        )
+
+        if path.exists():
+
+            st.image(
+                str(path),
+                use_container_width=True,
+            )
+
+        else:
+
+            st.warning(
+                f"Chart {index} was generated but "
+                f"the file could not be found: "
+                f"`{chart_path}`"
+            )
+
+
+def render_execution_operations(result):
+    """
+    Render executed operation names.
+    """
+
+    execution = result.get(
+        "execution",
+        {},
+    )
+
+    execution_results = execution.get(
+        "results",
+        [],
+    )
+
+    if not execution_results:
+        return
+
+    with st.expander(
+        "🔧 Executed Operations",
+        expanded=False,
+    ):
+
+        for index, item in enumerate(
+            execution_results,
+            start=1,
+        ):
+
+            operation = item.get(
+                "operation",
+                "unknown",
+            )
+
+            operation_status = item.get(
+                "status",
+                "unknown",
+            )
+
+            if operation_status == "success":
+
+                st.success(
+                    f"{index}. `{operation}` → success"
+                )
+
+            else:
+
+                st.error(
+                    f"{index}. `{operation}` → "
+                    f"{operation_status}"
+                )
+
+
+def render_conversation_item(item, index):
+    """
+    Render one previous analysis in the conversation.
+    """
+
+    query = item.get(
+        "query",
+        "",
+    )
+
+    response = item.get(
+        "response",
+        "",
+    )
+
+    result = item.get(
+        "result",
+        {},
+    )
+
+    chart_paths = item.get(
+        "chart_paths",
+        [],
+    )
+
+    status = result.get(
+        "status"
+    )
+
+    with st.chat_message("user"):
+
+        st.markdown(
+            query
+        )
+
+    with st.chat_message("assistant"):
+
+        if status == "success":
+
+            st.success(
+                "Analysis completed successfully."
+            )
+
+        elif status == "partial":
+
+            st.warning(
+                "Analysis completed with some errors."
+            )
+
+        else:
+
+            st.error(
+                "Analysis failed."
+            )
+
+        if response:
+
+            st.markdown(
+                response
+            )
+
+        render_charts(
+            chart_paths
+        )
+
+        render_execution_summary(
+            result
+        )
+
+        render_execution_operations(
+            result
+        )
+
+        with st.expander(
+            "🔍 Analysis Details",
+            expanded=False,
+        ):
+
+            st.json(
+                result
+            )
+
+
+# ============================================================
 # HEADER
 # ============================================================
 
-st.title("📊 Autonomous AI Data Analyst")
+st.title(
+    "📊 Autonomous AI Data Analyst"
+)
 
 st.markdown(
     """
-Upload a CSV or Excel business file, ask a question,
-and let the autonomous AI analyze your data.
+Upload a CSV or Excel business file and have an autonomous AI
+plan, execute, analyze, visualize, and explain your data.
 """
 )
 
@@ -37,17 +354,23 @@ and let the autonomous AI analyze your data.
 
 with st.sidebar:
 
-    st.header("⚙️ Configuration")
+    st.header(
+        "⚙️ Configuration"
+    )
 
     provider = st.selectbox(
         "LLM Provider",
-        options=["nvidia"],
+        options=[
+            "nvidia",
+        ],
         index=0,
     )
 
     st.divider()
 
-    st.markdown("### 🤖 AI Engine")
+    st.markdown(
+        "### 🤖 AI Engine"
+    )
 
     st.info(
         "Nemotron is currently configured as the "
@@ -56,9 +379,48 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption(
-        "Autonomous AI Data Analyst"
-    )
+    if st.session_state.dataset is not None:
+
+        st.markdown(
+            "### 📁 Current Dataset"
+        )
+
+        st.caption(
+            st.session_state.dataset_name
+        )
+
+        st.metric(
+            "Rows",
+            f"{st.session_state.dataset.shape[0]:,}",
+        )
+
+        st.metric(
+            "Columns",
+            f"{st.session_state.dataset.shape[1]:,}",
+        )
+
+        st.divider()
+
+        st.markdown(
+            "### 💬 Session"
+        )
+
+        st.metric(
+            "Analyses",
+            st.session_state.analysis_count,
+        )
+
+        if st.button(
+            "🗑️ Clear Conversation",
+            use_container_width=True,
+        ):
+
+            st.session_state.conversation = []
+            st.session_state.analysis_count = 0
+
+            st.rerun()
+
+    st.divider()
 
     st.caption(
         "Upload → Plan → Execute → Analyze → Explain"
@@ -69,26 +431,68 @@ with st.sidebar:
 # FILE UPLOAD
 # ============================================================
 
-st.subheader("📁 Upload Business Data")
+st.subheader(
+    "📁 Upload Business Data"
+)
 
 uploaded_file = st.file_uploader(
     "Choose a CSV or Excel file",
-    type=["csv", "xlsx"],
+    type=[
+        "csv",
+        "xlsx",
+    ],
 )
 
 
 # ============================================================
-# EMPTY STATE
+# DATASET MANAGEMENT
 # ============================================================
 
-if uploaded_file is None:
+if uploaded_file is not None:
 
-    st.info(
-        "Upload a CSV or Excel file to start your analysis."
+    file_changed = (
+        st.session_state.dataset_name
+        != uploaded_file.name
     )
 
-    st.markdown(
-        """
+    if file_changed:
+
+        try:
+
+            new_df = load_uploaded_file(
+                uploaded_file
+            )
+
+        except Exception as exc:
+
+            st.error(
+                f"Could not read the uploaded file: {exc}"
+            )
+
+            st.stop()
+
+        st.session_state.dataset = new_df
+        st.session_state.dataset_name = (
+            uploaded_file.name
+        )
+
+        st.session_state.conversation = []
+        st.session_state.analysis_count = 0
+
+        st.success(
+            f"Loaded `{uploaded_file.name}` successfully."
+        )
+
+else:
+
+    if st.session_state.dataset is None:
+
+        st.info(
+            "Upload a CSV or Excel file to start your analysis."
+        )
+
+        st.markdown(
+            """
 ### What this system can do
 
 - 📊 Analyze business datasets
@@ -97,42 +501,23 @@ if uploaded_file is None:
 - 🏆 Find highest/lowest values
 - 📈 Generate charts
 - 🤖 Automatically plan analysis steps
-- 🧠 Generate a business-friendly explanation
+- 🧠 Generate business-friendly explanations
+- 💬 Continue asking questions about the same dataset
 """
-    )
+        )
 
-    st.stop()
-
-
-# ============================================================
-# DATA LOADING
-# ============================================================
-
-try:
-
-    if uploaded_file.name.lower().endswith(".csv"):
-
-        df = pd.read_csv(uploaded_file)
-
-    else:
-
-        df = pd.read_excel(uploaded_file)
-
-except Exception as exc:
-
-    st.error(
-        f"Could not read the uploaded file: {exc}"
-    )
-
-    st.stop()
+        st.stop()
 
 
 # ============================================================
-# DATASET HEADER
+# CURRENT DATASET
 # ============================================================
+
+df = st.session_state.dataset
+
 
 st.success(
-    f"Loaded `{uploaded_file.name}` successfully."
+    f"Dataset ready: `{st.session_state.dataset_name}`"
 )
 
 
@@ -142,8 +527,12 @@ st.success(
 
 row_count = df.shape[0]
 column_count = df.shape[1]
-missing_count = int(df.isna().sum().sum())
-duplicate_count = int(df.duplicated().sum())
+missing_count = int(
+    df.isna().sum().sum()
+)
+duplicate_count = int(
+    df.duplicated().sum()
+)
 
 metric_1, metric_2, metric_3, metric_4 = st.columns(4)
 
@@ -208,11 +597,17 @@ with st.expander(
                 for dtype in df.dtypes
             ],
             "Missing": [
-                int(df[column].isna().sum())
+                int(
+                    df[column].isna().sum()
+                )
                 for column in df.columns
             ],
             "Unique": [
-                int(df[column].nunique(dropna=True))
+                int(
+                    df[column].nunique(
+                        dropna=True
+                    )
+                )
                 for column in df.columns
             ],
         }
@@ -226,29 +621,36 @@ with st.expander(
 
 
 # ============================================================
-# USER QUESTION
+# CONVERSATION HISTORY
 # ============================================================
 
-st.subheader("💬 Ask Your Data")
+if st.session_state.conversation:
 
-user_query = st.text_area(
-    "What would you like to know?",
-    placeholder=(
-        "Example: Calculate total revenue by region, "
-        "find the highest-revenue region, and create a bar chart."
-    ),
-    height=120,
+    st.subheader(
+        "💬 Analysis Conversation"
+    )
+
+    for index, item in enumerate(
+        st.session_state.conversation,
+        start=1,
+    ):
+
+        render_conversation_item(
+            item,
+            index,
+        )
+
+
+# ============================================================
+# NEW QUESTION
+# ============================================================
+
+st.subheader(
+    "💬 Ask Your Data"
 )
 
-
-# ============================================================
-# ANALYZE BUTTON
-# ============================================================
-
-analyze_button = st.button(
-    "🚀 Analyze Data",
-    type="primary",
-    use_container_width=True,
+user_query = st.chat_input(
+    "Ask a question about your dataset..."
 )
 
 
@@ -256,9 +658,11 @@ analyze_button = st.button(
 # ANALYSIS
 # ============================================================
 
-if analyze_button:
+if user_query:
 
-    if not user_query.strip():
+    user_query = user_query.strip()
+
+    if not user_query:
 
         st.warning(
             "Please enter a question first."
@@ -266,281 +670,153 @@ if analyze_button:
 
         st.stop()
 
-    progress_container = st.empty()
+    with st.chat_message("user"):
 
-    progress_container.info(
-        "🤖 AI is planning and executing your analysis..."
-    )
-
-    try:
-
-        pipeline = AnalysisPipeline(
-            provider=provider
+        st.markdown(
+            user_query
         )
 
-        result = pipeline.run(
-            df=df,
-            user_query=user_query,
+    with st.chat_message("assistant"):
+
+        progress_container = st.empty()
+
+        progress_container.info(
+            "🤖 AI is planning and executing your analysis..."
         )
 
-    except Exception as exc:
+        try:
+
+            pipeline = AnalysisPipeline(
+                provider=provider
+            )
+
+            result = pipeline.run(
+                df=df,
+                user_query=user_query,
+            )
+
+        except Exception as exc:
+
+            progress_container.empty()
+
+            st.error(
+                f"Analysis failed: {exc}"
+            )
+
+            st.stop()
 
         progress_container.empty()
 
-        st.error(
-            f"Analysis failed: {exc}"
-        )
 
-        st.stop()
+        # ====================================================
+        # PIPELINE STATUS
+        # ====================================================
 
-    progress_container.empty()
-
-
-    # ========================================================
-    # PIPELINE STATUS
-    # ========================================================
-
-    status = result.get(
-        "status"
-    )
-
-    if status == "success":
-
-        st.success(
-            "✅ Analysis completed successfully."
-        )
-
-    elif status == "partial":
-
-        st.warning(
-            "⚠️ Analysis completed with some errors."
-        )
-
-    else:
-
-        st.error(
-            "❌ Analysis failed."
-        )
-
-
-    # ========================================================
-    # FINAL AI RESPONSE
-    # ========================================================
-
-    final_response = result.get(
-        "final_response"
-    )
-
-    if final_response:
-
-        st.subheader(
-            "🧠 AI Analysis"
-        )
-
-        st.markdown(
-            final_response
-        )
-
-    else:
-
-        st.warning(
-            "No final AI response was generated."
-        )
-
-
-    # ========================================================
-    # EXECUTION RESULTS
-    # ========================================================
-
-    execution = result.get(
-        "execution",
-        {},
-    )
-
-    execution_results = execution.get(
-        "results",
-        [],
-    )
-
-
-    # ========================================================
-    # EXECUTION SUMMARY
-    # ========================================================
-
-    successful_steps = sum(
-        1
-        for item in execution_results
-        if item.get("status") == "success"
-    )
-
-    failed_steps = sum(
-        1
-        for item in execution_results
-        if item.get("status") != "success"
-    )
-
-    if execution_results:
-
-        st.subheader(
-            "⚙️ Execution Summary"
-        )
-
-        summary_1, summary_2, summary_3 = st.columns(3)
-
-        with summary_1:
-
-            st.metric(
-                "Operations",
-                len(execution_results),
-            )
-
-        with summary_2:
-
-            st.metric(
-                "Successful",
-                successful_steps,
-            )
-
-        with summary_3:
-
-            st.metric(
-                "Failed",
-                failed_steps,
-            )
-
-
-    # ========================================================
-    # CHART DETECTION
-    # ========================================================
-
-    chart_paths = []
-
-    for execution_result in execution_results:
-
-        if execution_result.get(
+        status = result.get(
             "status"
-        ) != "success":
-
-            continue
-
-        operation = execution_result.get(
-            "operation"
         )
 
-        if operation not in {
-            "generate_bar_chart",
-            "generate_line_chart",
-        }:
+        if status == "success":
 
-            continue
-
-        operation_result = (
-            execution_result.get(
-                "result",
-                {},
+            st.success(
+                "✅ Analysis completed successfully."
             )
-        )
 
-        output_path = (
-            operation_result.get(
-                "output_path"
+        elif status == "partial":
+
+            st.warning(
+                "⚠️ Analysis completed with some errors."
             )
-        )
 
-        if output_path:
+        else:
 
-            chart_paths.append(
-                output_path
+            st.error(
+                "❌ Analysis failed."
             )
 
 
-    # ========================================================
-    # DISPLAY CHARTS
-    # ========================================================
+        # ====================================================
+        # FINAL RESPONSE
+        # ====================================================
 
-    if chart_paths:
-
-        st.subheader(
-            "📊 Visualization"
+        final_response = result.get(
+            "final_response"
         )
 
-        for index, chart_path in enumerate(
-            chart_paths,
-            start=1,
-        ):
+        if final_response:
 
-            path = Path(
-                chart_path
+            st.markdown(
+                final_response
             )
 
-            if path.exists():
+        else:
 
-                st.image(
-                    str(path),
-                    use_container_width=True,
-                )
-
-            else:
-
-                st.warning(
-                    f"Chart {index} was generated but "
-                    f"the file could not be found: "
-                    f"`{chart_path}`"
-                )
+            st.warning(
+                "No final AI response was generated."
+            )
 
 
-    # ========================================================
-    # EXECUTION OPERATIONS
-    # ========================================================
+        # ====================================================
+        # CHARTS
+        # ====================================================
 
-    if execution_results:
+        chart_paths = extract_chart_paths(
+            result
+        )
+
+        render_charts(
+            chart_paths
+        )
+
+
+        # ====================================================
+        # EXECUTION SUMMARY
+        # ====================================================
+
+        render_execution_summary(
+            result
+        )
+
+
+        # ====================================================
+        # EXECUTION OPERATIONS
+        # ====================================================
+
+        render_execution_operations(
+            result
+        )
+
+
+        # ====================================================
+        # ANALYSIS DETAILS
+        # ====================================================
 
         with st.expander(
-            "🔧 Executed Operations",
+            "🔍 Analysis Details",
             expanded=False,
         ):
 
-            for index, item in enumerate(
-                execution_results,
-                start=1,
-            ):
-
-                operation = item.get(
-                    "operation",
-                    "unknown",
-                )
-
-                operation_status = item.get(
-                    "status",
-                    "unknown",
-                )
-
-                if operation_status == "success":
-
-                    st.success(
-                        f"{index}. `{operation}` → success"
-                    )
-
-                else:
-
-                    st.error(
-                        f"{index}. `{operation}` → "
-                        f"{operation_status}"
-                    )
+            st.json(
+                result
+            )
 
 
     # ========================================================
-    # ANALYSIS DETAILS
+    # SAVE CONVERSATION
     # ========================================================
 
-    with st.expander(
-        "🔍 Analysis Details",
-        expanded=False,
-    ):
+    st.session_state.conversation.append(
+        {
+            "query": user_query,
+            "response": final_response,
+            "result": result,
+            "chart_paths": chart_paths,
+        }
+    )
 
-        st.json(
-            result
-        )
+    st.session_state.analysis_count += 1
+
+    st.rerun()
 
 
 # ============================================================
