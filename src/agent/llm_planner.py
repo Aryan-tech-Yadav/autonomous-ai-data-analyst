@@ -9,9 +9,6 @@ class LLMPlanner:
 
     Converts a natural-language business question and
     dataset context into a structured analysis plan.
-
-    The planner can select one or multiple analysis and
-    visualization operations for the same user request.
     """
 
     def __init__(
@@ -50,6 +47,11 @@ Use for:
 - Basic statistics
 - Aggregations
 - Business metrics
+- Ranking
+- Percentage change
+- Column comparisons
+- Previous/current value analysis
+- Lag/shift analysis
 
 2. time_analysis
 
@@ -68,6 +70,7 @@ Use when the user asks for:
 - Visualization
 - Visual comparison
 - Visual representation
+- A ranked visual comparison
 
 4. bar_chart
 
@@ -77,7 +80,8 @@ Use for:
 - Product comparisons
 - Sales representative comparisons
 - Status comparisons
-- Ranked categorical values
+- Rankings
+- Top-N categorical values
 
 5. line_chart
 
@@ -85,13 +89,15 @@ Use for:
 - Trends over time
 - Date-based progression
 - Monthly trends
-- Daily trends
+- Daily progression
 - Revenue over time
 - Ordered time-series data
 
 ========================================================
 AVAILABLE OPERATIONS
 ========================================================
+
+Basic operations:
 
 - revenue_calculations
 - groupby_aggregation
@@ -101,12 +107,325 @@ AVAILABLE OPERATIONS
 - generate_bar_chart
 - generate_line_chart
 
+Advanced analytics operations:
+
+- rank_by_value
+- create_shifted_column
+- calculate_percentage_change
+- compare_columns
+
+========================================================
+SHIFT / PREVIOUS VALUE ANALYSIS
+========================================================
+
+Use create_shifted_column when the user asks for:
+
+- previous value
+- previous order
+- next order
+- prior value
+- prior order
+- value from the previous row
+- value from the next row
+- change from one order to the next
+- change between consecutive orders
+- consecutive value comparison
+- period-over-period comparison
+- previous period
+- next period
+- lag
+- shifted value
+- compare current value with previous value
+- percentage change from one order to the next
+
+The purpose of create_shifted_column is to create a derived
+column containing the previous or next value of another column.
+
+Use:
+
+{
+  "source_column": "<metric column>",
+  "output_column": "Previous <metric>",
+  "periods": 1,
+  "sort_column": "<ordering column>",
+  "ascending": true
+}
+
+For previous-value analysis:
+- periods = 1
+
+For next-value analysis:
+- periods = -1
+
+If the user specifies an ordering column such as:
+- Date
+- Order ID
+- sequence
+- timestamp
+
+use that column as sort_column.
+
+If the user's wording says "from one order to the next",
+"from the previous order", "next order", or "consecutive orders",
+you MUST establish the order of rows before calculating the change.
+
+Do NOT invent a custom pandas expression.
+
+Do NOT use revenue_calculations unless the user's question
+actually asks about revenue.
+
+========================================================
+PERCENTAGE CHANGE
+========================================================
+
+Use calculate_percentage_change when the user asks for:
+
+- percentage change
+- percent change
+- percentage increase
+- percentage decrease
+- growth percentage
+- growth rate
+- change from previous period
+- change between current and previous
+- increase/decrease percentage
+
+Use:
+
+{
+  "current_column": "<current/new column>",
+  "previous_column": "<previous/old column>",
+  "output_column": "Percentage Change"
+}
+
+Do NOT calculate the result yourself.
+
+IMPORTANT:
+
+If the user asks for percentage change between consecutive
+orders/rows/periods and the previous value does not already
+exist as a column, use TWO sequential operations:
+
+Step 1:
+create_shifted_column
+
+Step 2:
+calculate_percentage_change
+
+Example user question:
+
+"Calculate the percentage change in Unit Price from one
+order to the next."
+
+Correct plan:
+
+Step 1:
+{
+  "step": 1,
+  "operation": "create_shifted_column",
+  "description": "Create the previous Unit Price for each ordered record.",
+  "parameters": {
+    "source_column": "Unit Price",
+    "output_column": "Previous Unit Price",
+    "periods": 1,
+    "sort_column": "Order ID",
+    "ascending": true
+  }
+}
+
+Step 2:
+{
+  "step": 2,
+  "operation": "calculate_percentage_change",
+  "description": "Calculate the percentage change from the previous Unit Price.",
+  "parameters": {
+    "current_column": "Unit Price",
+    "previous_column": "Previous Unit Price",
+    "output_column": "Percentage Change"
+  }
+}
+
+If Date is the clear ordering field, use Date instead of Order ID.
+
+If Order ID is the clear ordering field, use Order ID.
+
+If the dataset contains an explicit chronological field,
+prefer it for chronological questions.
+
+The percentage-change step MUST reference the derived column
+created by the shift step.
+
+========================================================
+COLUMN COMPARISON
+========================================================
+
+Use compare_columns when the user asks to:
+
+- compare two columns
+- compare X with Y
+- compare current vs previous
+- determine which column is greater
+- compare two numeric metrics
+- count where one metric exceeds another
+
+Use:
+
+{
+  "left_column": "<first numeric column>",
+  "right_column": "<second numeric column>"
+}
+
+Do NOT calculate the comparison yourself.
+
+========================================================
+RANKING / TOP-N RULES
+========================================================
+
+Use rank_by_value when the user asks for:
+
+- rank
+- ranking
+- ranked
+- top N
+- top 3
+- top 5
+- top 10
+- highest N
+- lowest N
+- best N
+- worst N
+- largest N
+- smallest N
+- leading categories
+- leading regions
+- which regions perform best
+- which products perform best
+- rank categories by a metric
+- rank regions by revenue
+- rank sales representatives by sales
+
+Do NOT use find_max for an explicit Top-N request.
+
+For rank_by_value:
+
+{
+  "group_column": "<category column>",
+  "value_column": "<numeric metric>",
+  "aggregation": "sum",
+  "ascending": false,
+  "top_n": <N>
+}
+
+Rules:
+
+- "top" means ascending = false.
+- "highest" means ascending = false.
+- "best" normally means ascending = false.
+- "bottom" means ascending = true.
+- "lowest" means ascending = true.
+- "worst" normally means ascending = true.
+- If the user gives N, set top_n to N.
+- If the user asks only for ranking and gives no N, omit top_n.
+
+If the user asks only:
+
+"Which region has the highest revenue?"
+
+then a single maximum is sufficient.
+
+Use:
+- find_max
+or
+- rank_by_value with top_n = 1.
+
+========================================================
+GROUPED BREAKDOWN VS HIGHEST
+========================================================
+
+When the user asks:
+
+- revenue by region
+- sales by region
+- revenue for each region
+- region-wise revenue
+- revenue breakdown by region
+- category-wise sales
+- sales by product category
+
+the user wants the COMPLETE breakdown across all groups.
+
+Do NOT reduce the answer to top 1.
+
+Prefer:
+
+groupby_aggregation
+
+with:
+
+{
+  "group_column": "<category column>",
+  "value_column": "<numeric metric>",
+  "aggregation": "sum"
+}
+
+========================================================
+GROUPED BREAKDOWN + HIGHEST
+========================================================
+
+If the user asks BOTH for a grouped breakdown AND
+the highest group, provide both pieces of information.
+
+Examples:
+
+- "Show revenue by region and identify the highest."
+- "Calculate total revenue by region and tell me which region is highest."
+- "Give me region-wise sales and identify the best region."
+- "Show sales for each category and identify the highest."
+
+Use TWO analytical steps:
+
+1. groupby_aggregation
+2. find_max
+
+If the metric is derived, calculate the metric first.
+
+Do NOT replace the complete grouped breakdown with
+rank_by_value top_n = 1.
+
+========================================================
+WHEN TO USE RANKING VS GROUPING
+========================================================
+
+Use rank_by_value when the user's primary intent is:
+
+- ranking
+- top N
+- bottom N
+- best N
+- worst N
+- ordered leaderboard
+
+Use groupby_aggregation when the user's primary intent is:
+
+- by region
+- by category
+- for each region
+- for each category
+- complete breakdown
+- region-wise totals
+- category-wise totals
+
+Use BOTH groupby_aggregation and find_max when the user
+explicitly requests:
+
+- complete breakdown + highest
+- complete breakdown + lowest
+- breakdown + best group
+- breakdown + worst group
+
 ========================================================
 AUTOMATIC CHART SELECTION
 ========================================================
-
-Choose the chart type based on the meaning of the
-user's request.
 
 Use generate_bar_chart when:
 
@@ -115,7 +434,7 @@ Use generate_bar_chart when:
 - The user asks for values by product category.
 - The user asks for values by sales representative.
 - The user asks for rankings.
-- The user asks "which region has more revenue".
+- The user asks for Top-N values.
 - The user asks for category-wise comparison.
 
 Use generate_line_chart when:
@@ -123,14 +442,48 @@ Use generate_line_chart when:
 - The user asks for a trend.
 - The user asks how something changes over time.
 - The user asks for revenue over dates.
-- The user asks for monthly or daily progression.
+- The user asks for monthly progression.
+- The user asks for daily progression.
 - The X-axis represents an ordered time dimension.
 
-Do NOT use a line chart for simple category
-comparisons.
+Do NOT use a line chart for simple category comparisons.
 
 Do NOT use a bar chart for a continuous time trend
 unless the user explicitly requests bars.
+
+========================================================
+RANKING + CHART RULE
+========================================================
+
+If the user asks for a ranked visual comparison,
+Top-N visualization, or explicitly asks to show a
+ranking visually:
+
+1. Perform rank_by_value first.
+2. Generate the bar chart after the ranking.
+3. Use the ranking result as the basis for the chart.
+
+The ranking operation MUST appear before the chart.
+
+If the user only asks for a ranking and does not ask
+for a chart or visual representation, use only rank_by_value.
+
+========================================================
+GROUPED BREAKDOWN + CHART
+========================================================
+
+If the user asks for:
+
+- revenue by region with a chart
+- sales by category with visualization
+- region-wise revenue graph
+
+then:
+
+1. Perform the grouped analysis first.
+2. Generate the bar chart after the analysis.
+
+The analysis must appear before the chart.
 
 ========================================================
 MULTIPLE CHARTS
@@ -142,34 +495,14 @@ If the user asks for multiple different visualizations,
 create a separate chart operation for each requested
 visualization.
 
-Example:
-
-User:
-"Show revenue by region and revenue over time."
-
-Valid plan:
-
-Step 1:
-revenue_calculations
-
-Step 2:
-generate_bar_chart
-- Region
-- Revenue
-
-Step 3:
-generate_line_chart
-- Date
-- Revenue
-
-Do NOT combine two different charts into one operation.
-
 Each chart must have its own output_path.
 
-Example:
+Use:
 
-reports/revenue_by_region.png
-reports/revenue_over_time.png
+reports/chart_1.png
+reports/chart_2.png
+reports/chart_3.png
+reports/chart_4.png
 
 ========================================================
 DERIVED METRICS
@@ -187,12 +520,28 @@ If the dataset contains:
 Units Sold
 Unit Price
 
-and Total Revenue is missing, create Revenue using:
+and Total Revenue is missing or completely empty,
+create Revenue using:
 
 revenue_calculations
 
-Then use the derived Revenue column in later
-operations.
+Then use the derived Revenue column in later operations.
+
+If Total Revenue already contains usable values,
+prefer using Total Revenue directly.
+
+Derived columns created by earlier steps may be referenced
+by later steps in the same plan.
+
+Examples:
+
+create_shifted_column
+    ↓
+Previous Unit Price
+    ↓
+calculate_percentage_change
+    ↓
+Percentage Change
 
 ========================================================
 PLANNING RULES
@@ -220,37 +569,38 @@ PLANNING RULES
 10. If analysis is required before visualization,
     perform the analysis first.
 
-11. If a chart requires a derived metric, calculate
-    the metric before generating the chart.
+11. If a chart requires a derived metric, calculate the
+    metric before generating the chart.
 
 12. Multiple requested charts must produce multiple
     chart operations.
 
 13. Each chart must have a unique output path.
 
-14. Use these default chart paths when the user does
-    not specify a path:
+14. For ranking requests, prefer rank_by_value over
+    groupby_aggregation + find_max.
 
-    reports/chart_1.png
-    reports/chart_2.png
-    reports/chart_3.png
-    reports/chart_4.png
+15. Never use find_max to represent a Top-N ranking.
 
-15. For generate_bar_chart use:
+16. Do not invent a Top-N operation other than
+    rank_by_value.
 
-    category_column
-    value_column
-    output_path
-    title
+17. Do not use top_n = 1 as a substitute for a complete
+    grouped breakdown.
 
-16. For generate_line_chart use:
+18. When the user explicitly requests a breakdown AND
+    the highest/lowest group, include both analyses.
 
-    x_column
-    y_column
-    output_path
-    title
+19. For previous/current or consecutive-row analysis,
+    use create_shifted_column rather than inventing
+    custom pandas code.
 
-17. Prefer concise, meaningful chart titles.
+20. For consecutive percentage-change analysis, create
+    the previous value first, then calculate percentage
+    change using that derived column.
+
+21. Never use revenue_calculations merely because the
+    question contains the word "change".
 
 ========================================================
 IMPORTANT COLUMN RULES
@@ -285,6 +635,21 @@ For time analysis, look for:
 - Date
 - Time
 
+For percentage change:
+
+- current/new/latest metric
+- previous/old/prior metric
+
+For consecutive/previous-order percentage change:
+
+- metric column
+- ordering column such as Order ID or Date
+
+For comparisons:
+
+- first/left metric
+- second/right metric
+
 ========================================================
 OUTPUT FORMAT
 ========================================================
@@ -303,182 +668,39 @@ Use this exact top-level structure:
       "step": 1,
       "operation": "operation_name",
       "description": "what this step does",
-      "parameters": {}
-    }
-  ]
-}
-
-Every step MUST contain:
-
-- step
-- operation
-- description
-- parameters
-
-parameters MUST always be a JSON object.
-
-========================================================
-EXAMPLE 1
-========================================================
-
-User:
-"Show me revenue by region."
-
-Possible plan:
-
-{
-  "analysis_plan": [
-    {
-      "step": 1,
-      "operation": "revenue_calculations",
-      "description": "Calculate revenue from Units Sold and Unit Price.",
       "parameters": {
-        "units_column": "Units Sold",
-        "price_column": "Unit Price",
-        "output_column": "Revenue"
-      }
-    },
-    {
-      "step": 2,
-      "operation": "generate_bar_chart",
-      "description": "Generate a bar chart comparing revenue across regions.",
-      "parameters": {
-        "category_column": "Region",
-        "value_column": "Revenue",
-        "output_path": "reports/chart_1.png",
-        "title": "Revenue by Region"
+        "key": "value"
       }
     }
   ]
 }
 
 ========================================================
-EXAMPLE 2
+DATASET CONTEXT
 ========================================================
 
-User:
-"Show me revenue over time."
+Dataset context:
 
-Possible plan:
-
-{
-  "analysis_plan": [
-    {
-      "step": 1,
-      "operation": "revenue_calculations",
-      "description": "Calculate revenue from Units Sold and Unit Price.",
-      "parameters": {
-        "units_column": "Units Sold",
-        "price_column": "Unit Price",
-        "output_column": "Revenue"
-      }
-    },
-    {
-      "step": 2,
-      "operation": "generate_line_chart",
-      "description": "Generate a line chart showing revenue over time.",
-      "parameters": {
-        "x_column": "Date",
-        "y_column": "Revenue",
-        "output_path": "reports/chart_1.png",
-        "title": "Revenue Over Time"
-      }
-    }
-  ]
-}
+""" + str(context) + """
 
 ========================================================
-EXAMPLE 3
+USER QUESTION
 ========================================================
 
-User:
-"Show me revenue by region and revenue over time."
-
-Possible plan:
-
-{
-  "analysis_plan": [
-    {
-      "step": 1,
-      "operation": "revenue_calculations",
-      "description": "Calculate revenue from Units Sold and Unit Price.",
-      "parameters": {
-        "units_column": "Units Sold",
-        "price_column": "Unit Price",
-        "output_column": "Revenue"
-      }
-    },
-    {
-      "step": 2,
-      "operation": "generate_bar_chart",
-      "description": "Generate a bar chart comparing revenue across regions.",
-      "parameters": {
-        "category_column": "Region",
-        "value_column": "Revenue",
-        "output_path": "reports/chart_1.png",
-        "title": "Revenue by Region"
-      }
-    },
-    {
-      "step": 3,
-      "operation": "generate_line_chart",
-      "description": "Generate a line chart showing revenue over time.",
-      "parameters": {
-        "x_column": "Date",
-        "y_column": "Revenue",
-        "output_path": "reports/chart_2.png",
-        "title": "Revenue Over Time"
-      }
-    }
-  ]
-}
-
-========================================================
-FINAL RULE
-========================================================
-
-Return only the JSON analysis plan.
-"""
-
-        user_prompt = f"""
-USER QUESTION:
-
-{user_query}
-
-
-DATASET CONTEXT:
-
-{context}
-
-
-Create the autonomous analysis plan now.
-
-Determine automatically:
-
-1. Which analysis operations are required.
-2. Whether a chart is required.
-3. Which chart type is appropriate.
-4. Whether more than one chart is required.
-5. Which actual dataset columns should be used.
-6. Whether a derived Revenue column must be created.
-
-Return valid JSON only.
-"""
-
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ]
+""" + user_query
 
         return self.router.generate(
-            messages=messages,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_query,
+                },
+            ],
             provider=self.provider,
             temperature=0.1,
-            max_tokens=2200,
+            max_tokens=4096,
         )

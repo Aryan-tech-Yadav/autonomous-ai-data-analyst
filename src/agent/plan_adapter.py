@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 DERIVED_REVENUE_ALIASES = {
@@ -9,236 +9,171 @@ DERIVED_REVENUE_ALIASES = {
     "calculated_revenue",
 }
 
+PANDAS_ANALYSIS_OPERATIONS = {
+    "revenue_calculations",
+    "revenue_calculation",
+    "groupby_aggregation",
+    "group_by",
+    "find_max",
+    "statistics",
+    "calculate_statistics",
+    "categorical_analysis",
+    "rank_by_value",
+    "ranking",
+    "calculate_percentage_change",
+    "percentage_change",
+    "compare_columns",
+    "comparison",
+    "create_shifted_column",
+    "shift_column",
+    "shift",
+    "lag",
+}
+
+
+OPERATION_ALIASES = {
+    "revenue_calculation": "revenue_calculations",
+    "group_by": "groupby_aggregation",
+    "calculate_statistics": "statistics",
+    "ranking": "rank_by_value",
+    "percentage_change": "calculate_percentage_change",
+    "comparison": "compare_columns",
+    "shift_column": "create_shifted_column",
+    "shift": "create_shifted_column",
+    "lag": "create_shifted_column",
+}
+
 
 def _normalize(value: Any) -> str:
-    return str(value).strip().lower()
+    return str(value).strip().lower().replace(" ", "_")
 
 
-def _find_actual_column(
-    requested: str,
-    actual_columns: List[str],
-) -> Optional[str]:
+def _canonical_operation(operation: Any) -> str:
+    normalized = _normalize(operation)
+    return OPERATION_ALIASES.get(normalized, normalized)
 
-    if not requested:
-        return None
 
-    requested_normalized = _normalize(
-        requested
-    )
+def _schema_columns(context: dict[str, Any] | None) -> list[str]:
+    if not context:
+        return []
+
+    schema = context.get("schema", {})
+
+    if not isinstance(schema, dict):
+        return []
+
+    columns = schema.get("columns", [])
+
+    if not isinstance(columns, list):
+        return []
+
+    result = []
+
+    for column in columns:
+        if isinstance(column, dict) and column.get("name"):
+            result.append(str(column["name"]))
+
+    return result
+
+
+def _find_column(
+    requested: Any,
+    available_columns: list[str],
+    derived_columns: set[str] | None = None,
+) -> str:
+    if requested is None:
+        raise ValueError("Column name is required.")
+
+    requested_text = str(requested).strip()
+
+    if not requested_text:
+        raise ValueError("Column name cannot be empty.")
+
+    derived_columns = derived_columns or set()
+
+    all_columns = list(available_columns) + list(derived_columns)
 
     # Exact match first.
-    for column in actual_columns:
-
-        if _normalize(column) == requested_normalized:
+    for column in all_columns:
+        if column == requested_text:
             return column
 
-    return None
+    normalized_requested = _normalize(requested_text)
 
+    # Normalized match.
+    for column in all_columns:
+        if _normalize(column) == normalized_requested:
+            return column
 
-def _find_column_by_keywords(
-    keywords: List[str],
-    actual_columns: List[str],
-) -> Optional[str]:
-
-    normalized_columns = [
-        (
-            column,
-            _normalize(column),
-        )
-        for column in actual_columns
-    ]
-
-    # First try exact keyword matches.
-    for keyword in keywords:
-
-        keyword_normalized = _normalize(
-            keyword
-        )
-
-        for column, normalized in normalized_columns:
-
-            if normalized == keyword_normalized:
+    # Revenue aliases.
+    if normalized_requested in {
+        _normalize(alias)
+        for alias in DERIVED_REVENUE_ALIASES
+    }:
+        for column in all_columns:
+            if _normalize(column) in {
+                _normalize(alias)
+                for alias in DERIVED_REVENUE_ALIASES
+            }:
                 return column
 
-    # Then try substring matches.
-    for keyword in keywords:
+        if "Revenue" in derived_columns:
+            return "Revenue"
 
-        keyword_normalized = _normalize(
-            keyword
-        )
-
-        for column, normalized in normalized_columns:
-
-            if keyword_normalized in normalized:
-                return column
-
-    return None
-
-
-def _is_derived_revenue(
-    value: Any,
-) -> bool:
-
-    return _normalize(
-        value
-    ) in DERIVED_REVENUE_ALIASES
-
-
-def _resolve_column(
-    requested: Any,
-    actual_columns: List[str],
-    keywords: Optional[List[str]] = None,
-) -> Optional[str]:
-
-    if isinstance(
-        requested,
-        str,
-    ):
-
-        actual = _find_actual_column(
-            requested,
-            actual_columns,
-        )
-
-        if actual:
-            return actual
-
-        if _is_derived_revenue(
-            requested
-        ):
-
-            return requested
-
-    if keywords:
-
-        return _find_column_by_keywords(
-            keywords,
-            actual_columns,
-        )
-
-    return None
-
-
-def _normalize_operation(
-    operation: Any,
-) -> str:
-
-    if not operation:
-        return ""
-
-    operation = _normalize(
-        operation
-    )
-
-    aliases = {
-        "revenue_calculation":
-            "revenue_calculations",
-
-        "revenue_calculations":
-            "revenue_calculations",
-
-        "group_by":
-            "groupby_aggregation",
-
-        "groupby":
-            "groupby_aggregation",
-
-        "groupby_aggregate":
-            "groupby_aggregation",
-
-        "calculate_statistics":
-            "statistics",
-
-        "categorical":
-            "categorical_analysis",
-
-        "bar_chart":
-            "generate_bar_chart",
-
-        "chart_generator":
-            "generate_bar_chart",
-
-        "line_chart":
-            "generate_line_chart",
-    }
-
-    return aliases.get(
-        operation,
-        operation,
+    raise ValueError(
+        f"Unable to resolve column '{requested_text}'. "
+        f"Available columns: {all_columns}"
     )
 
 
-def _extract_operation(
-    step: Dict[str, Any],
-) -> str:
+def _tool_for_operation(operation: str) -> str:
+    canonical = _canonical_operation(operation)
 
-    candidates = [
-        step.get("operation"),
-        step.get("type"),
-        step.get("sub_tool"),
-        step.get("subtype"),
-    ]
+    if canonical in PANDAS_ANALYSIS_OPERATIONS:
+        return "pandas_analysis"
 
-    for candidate in candidates:
+    if canonical in {
+        "generate_bar_chart",
+        "generate_line_chart",
+    }:
+        return "chart_generator"
 
-        if candidate:
-            return str(
-                candidate
-            ).strip()
+    if canonical in {
+        "time_analysis",
+    }:
+        return "time_analysis"
 
-    return ""
+    return "pandas_analysis"
 
 
-def _adapt_revenue_calculation(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    units_column = _resolve_column(
-        parameters.get(
-            "units_column"
-        )
-        or parameters.get(
-            "quantity_column"
-        ),
-        actual_columns,
-        keywords=[
-            "Units Sold",
-            "Units",
-            "Quantity",
-        ],
+def _adapt_revenue_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+) -> dict[str, Any]:
+    units_column = parameters.get(
+        "units_column",
+        parameters.get("quantity_column"),
     )
 
-    price_column = _resolve_column(
-        parameters.get(
-            "price_column"
-        )
-        or parameters.get(
-            "unit_column"
-        ),
-        actual_columns,
-        keywords=[
-            "Unit Price",
-            "Price",
-        ],
+    price_column = parameters.get(
+        "price_column",
+        parameters.get("unit_price_column"),
     )
 
     output_column = parameters.get(
         "output_column",
-        "Revenue",
+        parameters.get("target_column", "Revenue"),
     )
 
-    if not units_column:
-        raise ValueError(
-            "Could not identify the units "
-            "column for revenue calculation."
-        )
+    units_column = _find_column(
+        units_column,
+        available_columns,
+    )
 
-    if not price_column:
-        raise ValueError(
-            "Could not identify the price "
-            "column for revenue calculation."
-        )
+    price_column = _find_column(
+        price_column,
+        available_columns,
+    )
 
     return {
         "units_column": units_column,
@@ -247,438 +182,557 @@ def _adapt_revenue_calculation(
     }
 
 
-def _adapt_groupby(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    group_column = _resolve_column(
-        parameters.get(
-            "group_column"
-        )
-        or parameters.get(
-            "group_by"
-        )
-        or parameters.get(
-            "group"
-        ),
-        actual_columns,
-        keywords=[
-            "Region",
-            "Category",
-            "Product Category",
-            "Sales Rep",
-        ],
+def _adapt_groupby_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    group_column = parameters.get(
+        "group_column",
+        parameters.get("group_by"),
     )
 
-    value_column = (
-        parameters.get(
-            "value_column"
-        )
-        or parameters.get(
-            "metric_column"
-        )
-        or parameters.get(
-            "value"
-        )
+    value_column = parameters.get(
+        "value_column",
+        parameters.get("metric_column"),
     )
-
-    if _is_derived_revenue(
-        value_column
-    ):
-
-        value_column = "Revenue"
-
-    else:
-
-        value_column = _resolve_column(
-            value_column,
-            actual_columns,
-            keywords=[
-                "Revenue",
-                "Total Revenue",
-                "Sales",
-                "Amount",
-            ],
-        )
 
     aggregation = parameters.get(
         "aggregation",
-        "sum",
+        parameters.get("agg", "sum"),
     )
 
-    if not group_column:
-        raise ValueError(
-            "Could not identify the "
-            "group column."
-        )
+    group_column = _find_column(
+        group_column,
+        available_columns,
+        derived_columns,
+    )
 
-    if not value_column:
-        raise ValueError(
-            "Could not identify the "
-            "value column."
-        )
+    value_column = _find_column(
+        value_column,
+        available_columns,
+        derived_columns,
+    )
 
     return {
         "group_column": group_column,
         "value_column": value_column,
-        "aggregation": str(
-            aggregation
-        ).lower().strip(),
+        "aggregation": aggregation,
     }
 
 
-def _adapt_find_max(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
+def _adapt_find_max_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    group_column = parameters.get(
+        "group_column",
+        parameters.get("group_by"),
+    )
 
-    group_column = _resolve_column(
-        parameters.get(
-            "group_column"
-        )
-        or parameters.get(
-            "group_by"
+    value_column = parameters.get(
+        "value_column",
+        parameters.get("metric_column"),
+    )
+
+    return {
+        "group_column": _find_column(
+            group_column,
+            available_columns,
+            derived_columns,
         ),
-        actual_columns,
-        keywords=[
-            "Region",
-            "Category",
-            "Product Category",
-            "Sales Rep",
-        ],
-    )
-
-    value_column = (
-        parameters.get(
-            "value_column"
-        )
-        or parameters.get(
-            "metric_column"
-        )
-        or parameters.get(
-            "value"
-        )
-    )
-
-    if _is_derived_revenue(
-        value_column
-    ):
-
-        value_column = "Revenue"
-
-    else:
-
-        value_column = _resolve_column(
+        "value_column": _find_column(
             value_column,
-            actual_columns,
-            keywords=[
-                "Revenue",
-                "Total Revenue",
-                "Sales",
-                "Amount",
-            ],
-        )
-
-    if not group_column:
-        raise ValueError(
-            "Could not identify the "
-            "group column."
-        )
-
-    if not value_column:
-        raise ValueError(
-            "Could not identify the "
-            "value column."
-        )
-
-    return {
-        "group_column": group_column,
-        "value_column": value_column,
-    }
-
-
-def _adapt_statistics(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    requested = (
-        parameters.get(
-            "column"
-        )
-        or parameters.get(
-            "value_column"
-        )
-        or parameters.get(
-            "metric_column"
-        )
-    )
-
-    column = _resolve_column(
-        requested,
-        actual_columns,
-        keywords=[
-            "Revenue",
-            "Total Revenue",
-            "Units Sold",
-            "Unit Price",
-        ],
-    )
-
-    if not column:
-        raise ValueError(
-            "Could not identify the "
-            "statistics column."
-        )
-
-    return {
-        "column": column,
-    }
-
-
-def _adapt_categorical(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    requested = (
-        parameters.get(
-            "column"
-        )
-        or parameters.get(
-            "category_column"
-        )
-    )
-
-    column = _resolve_column(
-        requested,
-        actual_columns,
-        keywords=[
-            "Region",
-            "Product Category",
-            "Sales Rep",
-            "Status",
-        ],
-    )
-
-    if not column:
-        raise ValueError(
-            "Could not identify the "
-            "categorical column."
-        )
-
-    return {
-        "column": column,
-    }
-
-
-def _adapt_bar_chart(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    category_column = _resolve_column(
-        parameters.get(
-            "category_column"
-        )
-        or parameters.get(
-            "group_column"
-        )
-        or parameters.get(
-            "x_column"
+            available_columns,
+            derived_columns,
         ),
-        actual_columns,
-        keywords=[
-            "Region",
-            "Product Category",
-            "Category",
-            "Sales Rep",
-            "Status",
-        ],
+    }
+
+
+def _adapt_rank_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    group_column = parameters.get(
+        "group_column",
+        parameters.get("group_by"),
     )
 
-    value_column = (
-        parameters.get(
-            "value_column"
-        )
-        or parameters.get(
-            "metric_column"
-        )
-        or parameters.get(
-            "y_column"
-        )
+    value_column = parameters.get(
+        "value_column",
+        parameters.get("metric_column"),
     )
 
-    if _is_derived_revenue(
-        value_column
-    ):
+    aggregation = parameters.get(
+        "aggregation",
+        parameters.get("agg", "sum"),
+    )
 
-        value_column = "Revenue"
+    ascending = parameters.get("ascending", False)
 
-    else:
+    top_n = parameters.get(
+        "top_n",
+        parameters.get("n"),
+    )
 
-        value_column = _resolve_column(
+    adapted = {
+        "group_column": _find_column(
+            group_column,
+            available_columns,
+            derived_columns,
+        ),
+        "value_column": _find_column(
             value_column,
-            actual_columns,
-            keywords=[
-                "Revenue",
-                "Total Revenue",
-                "Units Sold",
-                "Unit Price",
-                "Sales",
-                "Amount",
-            ],
-        )
-
-    if not category_column:
-        raise ValueError(
-            "Could not identify the "
-            "category column for bar chart."
-        )
-
-    if not value_column:
-        raise ValueError(
-            "Could not identify the "
-            "value column for bar chart."
-        )
-
-    return {
-        "category_column": category_column,
-        "value_column": value_column,
-        "output_path": parameters.get(
-            "output_path",
-            "reports/chart.png",
+            available_columns,
+            derived_columns,
         ),
-        "title": parameters.get(
-            "title",
-            "",
+        "aggregation": aggregation,
+        "ascending": bool(ascending),
+    }
+
+    if top_n is not None:
+        adapted["top_n"] = int(top_n)
+
+    return adapted
+
+
+def _adapt_percentage_change_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    current_column = parameters.get(
+        "current_column",
+        parameters.get(
+            "new_column",
+            parameters.get("current"),
         ),
-        "ascending": bool(
+    )
+
+    previous_column = parameters.get(
+        "previous_column",
+        parameters.get(
+            "old_column",
             parameters.get(
-                "ascending",
-                False,
-            )
+                "previous",
+                parameters.get("prior_column"),
+            ),
         ),
-    }
-
-
-def _adapt_line_chart(
-    parameters: Dict[str, Any],
-    actual_columns: List[str],
-) -> Dict[str, Any]:
-
-    x_column = _resolve_column(
-        parameters.get(
-            "x_column"
-        )
-        or parameters.get(
-            "category_column"
-        ),
-        actual_columns,
-        keywords=[
-            "Date",
-            "Time",
-            "Month",
-            "Year",
-        ],
     )
 
-    y_column = (
+    output_column = parameters.get(
+        "output_column",
         parameters.get(
-            "y_column"
-        )
-        or parameters.get(
-            "value_column"
-        )
-        or parameters.get(
-            "metric_column"
-        )
+            "target_column",
+            "Percentage Change",
+        ),
     )
-
-    if _is_derived_revenue(
-        y_column
-    ):
-
-        y_column = "Revenue"
-
-    else:
-
-        y_column = _resolve_column(
-            y_column,
-            actual_columns,
-            keywords=[
-                "Revenue",
-                "Total Revenue",
-                "Units Sold",
-                "Unit Price",
-                "Sales",
-            ],
-        )
-
-    if not x_column:
-        raise ValueError(
-            "Could not identify the "
-            "X column for line chart."
-        )
-
-    if not y_column:
-        raise ValueError(
-            "Could not identify the "
-            "Y column for line chart."
-        )
 
     return {
-        "x_column": x_column,
-        "y_column": y_column,
-        "output_path": parameters.get(
-            "output_path",
-            "reports/chart.png",
+        "current_column": _find_column(
+            current_column,
+            available_columns,
+            derived_columns,
         ),
-        "title": parameters.get(
-            "title",
-            "",
+        "previous_column": _find_column(
+            previous_column,
+            available_columns,
+            derived_columns,
+        ),
+        "output_column": output_column,
+    }
+
+
+def _adapt_comparison_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    left_column = parameters.get(
+        "left_column",
+        parameters.get("first_column"),
+    )
+
+    right_column = parameters.get(
+        "right_column",
+        parameters.get("second_column"),
+    )
+
+    return {
+        "left_column": _find_column(
+            left_column,
+            available_columns,
+            derived_columns,
+        ),
+        "right_column": _find_column(
+            right_column,
+            available_columns,
+            derived_columns,
         ),
     }
 
 
-def adapt_plan(
-    plan: Dict[str, Any],
-    context: Dict[str, Any],
-) -> Dict[str, Any]:
+def _adapt_shifted_column_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    source_column = parameters.get(
+        "source_column",
+        parameters.get(
+            "column",
+            parameters.get(
+                "value_column",
+                parameters.get("current_column"),
+            ),
+        ),
+    )
 
-    schema = context.get(
-        "schema",
+    output_column = parameters.get(
+        "output_column",
+        parameters.get(
+            "new_column",
+            parameters.get(
+                "target_column",
+                parameters.get(
+                    "name",
+                    None,
+                ),
+            ),
+        ),
+    )
+
+    if output_column is None:
+        resolved_source = _find_column(
+            source_column,
+            available_columns,
+            derived_columns,
+        )
+        output_column = f"Previous {resolved_source}"
+
+    sort_column = parameters.get(
+        "sort_column",
+        parameters.get(
+            "order_by",
+            parameters.get("sort_by"),
+        ),
+    )
+
+    periods = parameters.get(
+        "periods",
+        parameters.get(
+            "period",
+            parameters.get(
+                "shift",
+                1,
+            ),
+        ),
+    )
+
+    ascending = parameters.get(
+        "ascending",
+        True,
+    )
+
+    adapted = {
+        "source_column": _find_column(
+            source_column,
+            available_columns,
+            derived_columns,
+        ),
+        "output_column": str(output_column),
+        "periods": int(periods),
+        "ascending": bool(ascending),
+    }
+
+    if sort_column is not None:
+        adapted["sort_column"] = _find_column(
+            sort_column,
+            available_columns,
+            derived_columns,
+        )
+    else:
+        adapted["sort_column"] = None
+
+    return adapted
+
+
+def _adapt_statistics_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    column = parameters.get(
+        "column",
+        parameters.get("value_column"),
+    )
+
+    return {
+        "column": _find_column(
+            column,
+            available_columns,
+            derived_columns,
+        )
+    }
+
+
+def _adapt_categorical_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    column = parameters.get(
+        "column",
+        parameters.get("category_column"),
+    )
+
+    return {
+        "column": _find_column(
+            column,
+            available_columns,
+            derived_columns,
+        )
+    }
+
+
+def _adapt_chart_parameters(
+    parameters: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    adapted = dict(parameters)
+
+    for key in (
+        "x_column",
+        "y_column",
+        "group_column",
+        "value_column",
+        "column",
+    ):
+        if key in adapted and adapted[key] is not None:
+            adapted[key] = _find_column(
+                adapted[key],
+                available_columns,
+                derived_columns,
+            )
+
+    return adapted
+
+
+def _register_derived_column(
+    operation: str,
+    parameters: dict[str, Any],
+    derived_columns: set[str],
+) -> None:
+    canonical = _canonical_operation(operation)
+
+    if canonical == "revenue_calculations":
+        output_column = parameters.get(
+            "output_column",
+            "Revenue",
+        )
+        derived_columns.add(str(output_column))
+
+    elif canonical == "create_shifted_column":
+        output_column = parameters.get("output_column")
+
+        if output_column:
+            derived_columns.add(str(output_column))
+
+    elif canonical == "calculate_percentage_change":
+        output_column = parameters.get(
+            "output_column",
+            "Percentage Change",
+        )
+        derived_columns.add(str(output_column))
+
+
+def _adapt_step(
+    step: dict[str, Any],
+    available_columns: list[str],
+    derived_columns: set[str],
+) -> dict[str, Any]:
+    if not isinstance(step, dict):
+        raise ValueError("Each analysis step must be a dictionary.")
+
+    operation = _canonical_operation(
+        step.get("operation")
+    )
+
+    if not operation:
+        raise ValueError("Analysis step is missing operation.")
+
+    raw_parameters = step.get(
+        "parameters",
         {},
     )
 
-    schema_columns = schema.get(
-        "columns",
-        [],
+    if not isinstance(raw_parameters, dict):
+        raise ValueError(
+            f"Parameters for operation '{operation}' must be an object."
+        )
+
+    if operation == "revenue_calculations":
+        parameters = _adapt_revenue_parameters(
+            raw_parameters,
+            available_columns,
+        )
+
+    elif operation == "groupby_aggregation":
+        parameters = _adapt_groupby_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "find_max":
+        parameters = _adapt_find_max_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "rank_by_value":
+        parameters = _adapt_rank_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "calculate_percentage_change":
+        parameters = _adapt_percentage_change_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "compare_columns":
+        parameters = _adapt_comparison_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "create_shifted_column":
+        parameters = _adapt_shifted_column_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "statistics":
+        parameters = _adapt_statistics_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation == "categorical_analysis":
+        parameters = _adapt_categorical_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    elif operation in {
+        "generate_bar_chart",
+        "generate_line_chart",
+    }:
+        parameters = _adapt_chart_parameters(
+            raw_parameters,
+            available_columns,
+            derived_columns,
+        )
+
+    else:
+        parameters = dict(raw_parameters)
+
+    adapted_step = {
+        "step": step.get(
+            "step",
+            1,
+        ),
+        "operation": operation,
+        "tool": step.get(
+            "tool",
+            _tool_for_operation(operation),
+        ),
+        "description": step.get(
+            "description",
+            "",
+        ),
+        "parameters": parameters,
+    }
+
+    _register_derived_column(
+        operation,
+        parameters,
+        derived_columns,
     )
 
-    actual_columns = []
+    return adapted_step
 
-    for item in schema_columns:
 
-        if isinstance(
-            item,
-            dict,
-        ):
+def adapt_plan(
+    plan: dict[str, Any],
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Convert a validated LLM analysis plan into the internal
+    execution-plan format.
 
-            name = item.get(
-                "name"
-            )
+    `context` is accepted by design so the adapter can resolve
+    columns using the current dataset schema.
+    """
 
-            if name:
-                actual_columns.append(
-                    str(name)
-                )
+    if not isinstance(plan, dict):
+        raise ValueError("Plan must be a dictionary.")
 
     analysis_plan = plan.get(
         "analysis_plan",
         [],
     )
+
+    if not isinstance(analysis_plan, list):
+        raise ValueError(
+            "'analysis_plan' must be a list."
+        )
+
+    available_columns = _schema_columns(context)
+
+    # Fallback for callers that do not provide context.
+    if not available_columns:
+        for step in analysis_plan:
+            parameters = step.get(
+                "parameters",
+                {},
+            )
+
+            if not isinstance(parameters, dict):
+                continue
+
+            for key in (
+                "group_column",
+                "value_column",
+                "units_column",
+                "price_column",
+                "column",
+                "source_column",
+                "current_column",
+                "previous_column",
+                "left_column",
+                "right_column",
+                "sort_column",
+            ):
+                value = parameters.get(key)
+
+                if isinstance(value, str):
+                    if value not in available_columns:
+                        available_columns.append(value)
+
+    derived_columns: set[str] = set()
 
     execution_steps = []
 
@@ -686,121 +740,25 @@ def adapt_plan(
         analysis_plan,
         start=1,
     ):
+        normalized_step = dict(step)
 
-        operation = _extract_operation(
-            step
+        if "step" not in normalized_step:
+            normalized_step["step"] = index
+
+        adapted_step = _adapt_step(
+            normalized_step,
+            available_columns,
+            derived_columns,
         )
-
-        normalized_operation = (
-            _normalize_operation(
-                operation
-            )
-        )
-
-        parameters = step.get(
-            "parameters",
-            {},
-        )
-
-        if not isinstance(
-            parameters,
-            dict,
-        ):
-
-            parameters = {}
-
-        if normalized_operation == (
-            "revenue_calculations"
-        ):
-
-            adapted_parameters = (
-                _adapt_revenue_calculation(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        elif normalized_operation == (
-            "groupby_aggregation"
-        ):
-
-            adapted_parameters = (
-                _adapt_groupby(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        elif normalized_operation == (
-            "find_max"
-        ):
-
-            adapted_parameters = (
-                _adapt_find_max(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        elif normalized_operation in {
-            "statistics",
-            "calculate_statistics",
-        }:
-
-            adapted_parameters = (
-                _adapt_statistics(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-            normalized_operation = "statistics"
-
-        elif normalized_operation == (
-            "categorical_analysis"
-        ):
-
-            adapted_parameters = (
-                _adapt_categorical(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        elif normalized_operation == (
-            "generate_bar_chart"
-        ):
-
-            adapted_parameters = (
-                _adapt_bar_chart(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        elif normalized_operation == (
-            "generate_line_chart"
-        ):
-
-            adapted_parameters = (
-                _adapt_line_chart(
-                    parameters,
-                    actual_columns,
-                )
-            )
-
-        else:
-
-            adapted_parameters = parameters
 
         execution_steps.append(
-            {
-                "step": index,
-                "operation": normalized_operation,
-                "parameters": adapted_parameters,
-            }
+            adapted_step
         )
 
     return {
-        "execution_steps": execution_steps
+        "analysis_plan": analysis_plan,
+        "execution_steps": execution_steps,
+        "derived_columns": sorted(
+            derived_columns
+        ),
     }
