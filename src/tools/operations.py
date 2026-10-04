@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
@@ -588,19 +589,29 @@ def _validate_chart_columns(
 def _save_chart(
     fig,
     output_path: str | None = None,
-) -> str | None:
+) -> str:
+    """Save a chart and always return the actual saved file path."""
 
     if output_path:
+        save_path = Path(output_path)
+    else:
+        reports_dir = Path("reports")
+        reports_dir.mkdir(parents=True, exist_ok=True)
 
-        fig.savefig(
-            output_path,
-            bbox_inches="tight",
-            dpi=150,
-        )
+        existing = list(reports_dir.glob("chart_*.png"))
+        next_number = len(existing) + 1
 
-        return output_path
+        save_path = reports_dir / f"chart_{next_number}.png"
 
-    return None
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig.savefig(
+        save_path,
+        bbox_inches="tight",
+        dpi=150,
+    )
+
+    return str(save_path)
 
 
 # ==========================================================

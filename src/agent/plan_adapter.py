@@ -1,6 +1,9 @@
 from typing import Any
 
 
+CANONICAL_REVENUE_COLUMN = "Revenue"
+
+
 DERIVED_REVENUE_ALIASES = {
     "revenue",
     "total revenue",
@@ -32,6 +35,7 @@ PANDAS_ANALYSIS_OPERATIONS = {
 
 
 OPERATION_ALIASES = {
+    "calculate_revenue": "revenue_calculations",
     "revenue_calculation": "revenue_calculations",
     "group_by": "groupby_aggregation",
     "calculate_statistics": "statistics",
@@ -90,41 +94,53 @@ def _find_column(
         raise ValueError("Column name cannot be empty.")
 
     derived_columns = derived_columns or set()
+    normalized_requested = _normalize(requested_text)
 
-    all_columns = list(available_columns) + list(derived_columns)
+    revenue_aliases = {
+        _normalize(alias)
+        for alias in DERIVED_REVENUE_ALIASES
+    }
 
-    # Exact match first.
-    for column in all_columns:
+    # Canonical Revenue has priority over every revenue alias.
+    if normalized_requested in revenue_aliases:
+        if CANONICAL_REVENUE_COLUMN in derived_columns:
+            return CANONICAL_REVENUE_COLUMN
+
+        if CANONICAL_REVENUE_COLUMN in available_columns:
+            return CANONICAL_REVENUE_COLUMN
+
+    # Exact derived-column match.
+    for column in derived_columns:
         if column == requested_text:
             return column
 
-    normalized_requested = _normalize(requested_text)
+    # Exact source-column match.
+    for column in available_columns:
+        if column == requested_text:
+            return column
 
-    # Normalized match.
-    for column in all_columns:
+    # Normalized derived-column match.
+    for column in derived_columns:
         if _normalize(column) == normalized_requested:
             return column
 
-    # Revenue aliases.
-    if normalized_requested in {
-        _normalize(alias)
-        for alias in DERIVED_REVENUE_ALIASES
-    }:
-        for column in all_columns:
-            if _normalize(column) in {
-                _normalize(alias)
-                for alias in DERIVED_REVENUE_ALIASES
-            }:
-                return column
+    # Normalized source-column match.
+    for column in available_columns:
+        if _normalize(column) == normalized_requested:
+            return column
 
-        if "Revenue" in derived_columns:
-            return "Revenue"
+    # If no canonical Revenue exists yet, allow an existing
+    # source revenue alias such as Total Revenue.
+    if normalized_requested in revenue_aliases:
+        for column in available_columns:
+            if _normalize(column) in revenue_aliases:
+                return column
 
     raise ValueError(
         f"Unable to resolve column '{requested_text}'. "
-        f"Available columns: {all_columns}"
+        f"Available columns: "
+        f"{list(available_columns) + list(derived_columns)}"
     )
-
 
 def _tool_for_operation(operation: str) -> str:
     canonical = _canonical_operation(operation)
