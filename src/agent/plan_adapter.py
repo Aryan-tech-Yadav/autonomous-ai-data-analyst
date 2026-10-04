@@ -152,17 +152,32 @@ def _adapt_revenue_parameters(
 ) -> dict[str, Any]:
     units_column = parameters.get(
         "units_column",
-        parameters.get("quantity_column"),
+        parameters.get(
+            "units_sold_column",
+            parameters.get(
+                "quantity_column",
+                parameters.get("quantity"),
+            ),
+        ),
     )
 
     price_column = parameters.get(
         "price_column",
-        parameters.get("unit_price_column"),
+        parameters.get(
+            "unit_price_column",
+            parameters.get(
+                "unit_price",
+                parameters.get("price"),
+            ),
+        ),
     )
 
     output_column = parameters.get(
         "output_column",
-        parameters.get("target_column", "Revenue"),
+        parameters.get(
+            "target_column",
+            "Revenue",
+        ),
     )
 
     units_column = _find_column(

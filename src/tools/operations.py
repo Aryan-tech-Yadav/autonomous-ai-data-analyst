@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 # ==========================================================
@@ -24,16 +25,29 @@ def calculate_revenue(
             f"Price column '{price_column}' does not exist."
         )
 
-    units = pd.to_numeric(df[units_column], errors="coerce")
-    prices = pd.to_numeric(df[price_column], errors="coerce")
+    units = pd.to_numeric(
+        df[units_column],
+        errors="coerce",
+    )
 
-    revenue = units * prices
+    price = pd.to_numeric(
+        df[price_column],
+        errors="coerce",
+    )
+
+    revenue = units * price
+
+    valid_revenue = revenue.dropna()
 
     return {
         "operation": "calculate_revenue",
         "output_column": output_column,
-        "rows_calculated": int(revenue.notna().sum()),
-        "total_revenue": float(revenue.sum()),
+        "rows_calculated": int(valid_revenue.count()),
+        "total_revenue": (
+            None
+            if valid_revenue.empty
+            else float(valid_revenue.sum())
+        ),
         "revenue": revenue,
     }
 
@@ -59,12 +73,10 @@ def create_shifted_column(
     if not isinstance(periods, int):
         raise ValueError("periods must be an integer.")
 
-    if periods == 0:
-        raise ValueError("periods cannot be zero.")
-
     working_df = df.copy()
 
     if sort_column is not None:
+
         if sort_column not in working_df.columns:
             raise ValueError(
                 f"Sort column '{sort_column}' does not exist."
@@ -84,9 +96,9 @@ def create_shifted_column(
         "output_column": output_column,
         "periods": periods,
         "sort_column": sort_column,
-        "ascending": ascending,
-        "rows_shifted": int(shifted.notna().sum()),
+        "ascending": bool(ascending),
         "shifted_values": shifted,
+        "sorted_index": shifted.index,
     }
 
 
@@ -148,6 +160,7 @@ def groupby_aggregate(
     results = []
 
     for _, row in grouped.iterrows():
+
         group_value = row[group_column]
         numeric_value = row[value_column]
 
@@ -297,6 +310,7 @@ def categorical_analysis(
     results = {}
 
     for key, value in counts.items():
+
         if pd.isna(key):
             key = "NULL"
         else:
@@ -351,6 +365,7 @@ def rank_by_value(
         )
 
     if top_n is not None:
+
         if isinstance(top_n, bool) or not isinstance(top_n, int):
             raise ValueError("top_n must be an integer.")
 
@@ -396,6 +411,7 @@ def rank_by_value(
     results = []
 
     for _, row in ranked.iterrows():
+
         group_value = row[group_column]
         value = row[value_column]
 
@@ -553,6 +569,290 @@ def compare_columns(
 
 
 # ==========================================================
+# Chart Helpers
+# ==========================================================
+
+def _validate_chart_columns(
+    df: pd.DataFrame,
+    columns: list[str],
+) -> None:
+
+    for column in columns:
+
+        if column not in df.columns:
+            raise ValueError(
+                f"Chart column '{column}' does not exist."
+            )
+
+
+def _save_chart(
+    fig,
+    output_path: str | None = None,
+) -> str | None:
+
+    if output_path:
+
+        fig.savefig(
+            output_path,
+            bbox_inches="tight",
+            dpi=150,
+        )
+
+        return output_path
+
+    return None
+
+
+# ==========================================================
+# Bar Chart
+# ==========================================================
+
+def generate_bar_chart(
+    df: pd.DataFrame,
+    x_column: str,
+    y_column: str,
+    title: str | None = None,
+    aggregation: str = "sum",
+    top_n: int | None = None,
+    ascending: bool = False,
+    output_path: str | None = None,
+) -> Dict[str, Any]:
+
+    _validate_chart_columns(
+        df,
+        [x_column, y_column],
+    )
+
+    allowed_aggregations = {
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "count",
+        "median",
+    }
+
+    aggregation = str(
+        aggregation
+    ).strip().lower()
+
+    if aggregation not in allowed_aggregations:
+        raise ValueError(
+            f"Unsupported chart aggregation '{aggregation}'."
+        )
+
+    working_df = df[[x_column, y_column]].copy()
+
+    working_df[y_column] = pd.to_numeric(
+        working_df[y_column],
+        errors="coerce",
+    )
+
+    working_df = working_df.dropna(
+        subset=[x_column, y_column]
+    )
+
+    if working_df.empty:
+        raise ValueError(
+            "No valid data available for bar chart."
+        )
+
+    chart_data = (
+        working_df
+        .groupby(x_column, dropna=False)[y_column]
+        .agg(aggregation)
+        .reset_index()
+    )
+
+    chart_data = chart_data.sort_values(
+        by=y_column,
+        ascending=ascending,
+        kind="stable",
+    )
+
+    if top_n is not None:
+
+        if isinstance(top_n, bool) or not isinstance(top_n, int):
+            raise ValueError(
+                "top_n must be an integer."
+            )
+
+        if top_n <= 0:
+            raise ValueError(
+                "top_n must be greater than zero."
+            )
+
+        chart_data = chart_data.head(top_n)
+
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
+
+    ax.bar(
+        chart_data[x_column].astype(str),
+        chart_data[y_column],
+    )
+
+    ax.set_xlabel(x_column)
+    ax.set_ylabel(y_column)
+
+    ax.set_title(
+        title
+        or f"{y_column} by {x_column}"
+    )
+
+    fig.tight_layout()
+
+    saved_path = _save_chart(
+        fig,
+        output_path,
+    )
+
+    chart_data_records = []
+
+    for _, row in chart_data.iterrows():
+
+        chart_data_records.append(
+            {
+                "x": str(row[x_column]),
+                "y": float(row[y_column]),
+            }
+        )
+
+    plt.close(fig)
+
+    return {
+        "operation": "generate_bar_chart",
+        "chart_type": "bar",
+        "x_column": x_column,
+        "y_column": y_column,
+        "aggregation": aggregation,
+        "top_n": top_n,
+        "ascending": bool(ascending),
+        "title": title or f"{y_column} by {x_column}",
+        "output_path": saved_path,
+        "data": chart_data_records,
+    }
+
+
+# ==========================================================
+# Line Chart
+# ==========================================================
+
+def generate_line_chart(
+    df: pd.DataFrame,
+    x_column: str,
+    y_column: str,
+    title: str | None = None,
+    aggregation: str = "sum",
+    sort_x: bool = True,
+    output_path: str | None = None,
+) -> Dict[str, Any]:
+
+    _validate_chart_columns(
+        df,
+        [x_column, y_column],
+    )
+
+    allowed_aggregations = {
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "count",
+        "median",
+    }
+
+    aggregation = str(
+        aggregation
+    ).strip().lower()
+
+    if aggregation not in allowed_aggregations:
+        raise ValueError(
+            f"Unsupported chart aggregation '{aggregation}'."
+        )
+
+    working_df = df[[x_column, y_column]].copy()
+
+    working_df[y_column] = pd.to_numeric(
+        working_df[y_column],
+        errors="coerce",
+    )
+
+    working_df = working_df.dropna(
+        subset=[x_column, y_column]
+    )
+
+    if working_df.empty:
+        raise ValueError(
+            "No valid data available for line chart."
+        )
+
+    chart_data = (
+        working_df
+        .groupby(x_column, dropna=False)[y_column]
+        .agg(aggregation)
+        .reset_index()
+    )
+
+    if sort_x:
+        chart_data = chart_data.sort_values(
+            by=x_column,
+            kind="stable",
+        )
+
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
+
+    ax.plot(
+        chart_data[x_column].astype(str),
+        chart_data[y_column],
+        marker="o",
+    )
+
+    ax.set_xlabel(x_column)
+    ax.set_ylabel(y_column)
+
+    ax.set_title(
+        title
+        or f"{y_column} by {x_column}"
+    )
+
+    fig.tight_layout()
+
+    saved_path = _save_chart(
+        fig,
+        output_path,
+    )
+
+    chart_data_records = []
+
+    for _, row in chart_data.iterrows():
+
+        chart_data_records.append(
+            {
+                "x": str(row[x_column]),
+                "y": float(row[y_column]),
+            }
+        )
+
+    plt.close(fig)
+
+    return {
+        "operation": "generate_line_chart",
+        "chart_type": "line",
+        "x_column": x_column,
+        "y_column": y_column,
+        "aggregation": aggregation,
+        "sort_x": bool(sort_x),
+        "title": title or f"{y_column} by {x_column}",
+        "output_path": saved_path,
+        "data": chart_data_records,
+    }
+
+
+# ==========================================================
 # Operation Registry
 # ==========================================================
 
@@ -584,6 +884,12 @@ OPERATION_REGISTRY = {
 
     "compare_columns": compare_columns,
     "comparison": compare_columns,
+
+    "generate_bar_chart":
+        generate_bar_chart,
+
+    "generate_line_chart":
+        generate_line_chart,
 }
 
 
@@ -593,10 +899,15 @@ OPERATION_REGISTRY = {
 
 def get_operation(operation_name: str):
 
-    operation = OPERATION_REGISTRY.get(operation_name)
+    operation = OPERATION_REGISTRY.get(
+        operation_name
+    )
 
     if operation is None:
-        available = ", ".join(OPERATION_REGISTRY.keys())
+
+        available = ", ".join(
+            OPERATION_REGISTRY.keys()
+        )
 
         raise ValueError(
             f"Unknown operation '{operation_name}'. "

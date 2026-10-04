@@ -12,15 +12,17 @@ from src.tools.operations import (
     rank_by_value,
     calculate_percentage_change,
     compare_columns,
-)
-
-from src.tools.pandas_tool import pandas_analysis
-from src.tools.time_tool import time_analysis
-from src.tools.chart_tool import (
     generate_bar_chart,
     generate_line_chart,
 )
 
+from src.tools.pandas_tool import pandas_analysis
+from src.tools.time_tool import time_analysis
+
+
+# ============================================================
+# TOOL REGISTRY
+# ============================================================
 
 TOOL_REGISTRY: Dict[str, Callable] = {
     "pandas_analysis": pandas_analysis,
@@ -31,7 +33,12 @@ TOOL_REGISTRY: Dict[str, Callable] = {
 }
 
 
+# ============================================================
+# OPERATION REGISTRY
+# ============================================================
+
 OPERATION_REGISTRY: Dict[str, Callable] = {
+    "calculate_revenue": calculate_revenue,
     "revenue_calculation": calculate_revenue,
     "revenue_calculations": calculate_revenue,
 
@@ -54,16 +61,17 @@ OPERATION_REGISTRY: Dict[str, Callable] = {
     "rank_by_value": rank_by_value,
     "ranking": rank_by_value,
 
-    "calculate_percentage_change":
-        calculate_percentage_change,
-
-    "percentage_change":
-        calculate_percentage_change,
+    "calculate_percentage_change": calculate_percentage_change,
+    "percentage_change": calculate_percentage_change,
 
     "compare_columns": compare_columns,
     "comparison": compare_columns,
 }
 
+
+# ============================================================
+# TOOL CAPABILITIES
+# ============================================================
 
 TOOL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
 
@@ -316,12 +324,18 @@ TOOL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
 }
 
 
+# ============================================================
+# REGISTRY ACCESS FUNCTIONS
+# ============================================================
+
 def get_tool(tool_name: str) -> Callable:
 
     tool = TOOL_REGISTRY.get(tool_name)
 
     if tool is None:
-        available_tools = ", ".join(TOOL_REGISTRY.keys())
+        available_tools = ", ".join(
+            TOOL_REGISTRY.keys()
+        )
 
         raise ValueError(
             f"Unknown tool: {tool_name}. "
@@ -333,7 +347,9 @@ def get_tool(tool_name: str) -> Callable:
 
 def get_operation(operation_name: str) -> Callable:
 
-    operation = OPERATION_REGISTRY.get(operation_name)
+    operation = OPERATION_REGISTRY.get(
+        operation_name
+    )
 
     if operation is None:
         available_operations = ", ".join(
@@ -349,20 +365,28 @@ def get_operation(operation_name: str) -> Callable:
 
 
 def list_tools() -> list[str]:
-    return list(TOOL_REGISTRY.keys())
+    return list(
+        TOOL_REGISTRY.keys()
+    )
 
 
 def list_operations() -> list[str]:
-    return list(OPERATION_REGISTRY.keys())
+    return list(
+        OPERATION_REGISTRY.keys()
+    )
 
 
 def list_capabilities() -> dict:
     return TOOL_CAPABILITIES.copy()
 
 
-def get_capability(capability_name: str) -> dict:
+def get_capability(
+    capability_name: str,
+) -> dict:
 
-    capability = TOOL_CAPABILITIES.get(capability_name)
+    capability = TOOL_CAPABILITIES.get(
+        capability_name
+    )
 
     if capability is None:
         available_capabilities = ", ".join(
@@ -371,7 +395,8 @@ def get_capability(capability_name: str) -> dict:
 
         raise ValueError(
             f"Unknown capability: {capability_name}. "
-            f"Available capabilities: {available_capabilities}"
+            f"Available capabilities: "
+            f"{available_capabilities}"
         )
 
     return capability
