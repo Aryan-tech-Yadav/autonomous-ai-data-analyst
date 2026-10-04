@@ -156,6 +156,150 @@ def render_dataset_overview(df):
         )
 
 # ============================================================
+# STRUCTURED ANALYSIS RESULTS
+# ============================================================
+
+def render_structured_results(result):
+    """Render verified tabular results from executed operations."""
+
+    execution = result.get("execution") or {}
+    execution_results = execution.get("results", [])
+
+    tables = []
+
+    for item in execution_results:
+
+        if item.get("status") != "success":
+            continue
+
+        operation = item.get("operation", "")
+        operation_result = item.get("result") or {}
+
+        if not isinstance(operation_result, dict):
+            continue
+
+        # --------------------------------------------------------
+        # GROUPBY / AGGREGATION
+        # --------------------------------------------------------
+
+        if operation in {
+            "groupby_aggregation",
+            "groupby_aggregate",
+            "group_by",
+        }:
+
+            results = operation_result.get("results")
+
+            if isinstance(results, list) and results:
+                rows = []
+
+                for row in results:
+                    if not isinstance(row, dict):
+                        continue
+
+                    rows.append(row)
+
+                if rows:
+                    tables.append(
+                        (
+                            "Regional / Group Analysis",
+                            rows,
+                        )
+                    )
+
+        # --------------------------------------------------------
+        # RANKING
+        # --------------------------------------------------------
+
+        elif operation == "rank_by_value":
+
+            results = operation_result.get("results")
+
+            if isinstance(results, list) and results:
+                rows = []
+
+                for row in results:
+                    if not isinstance(row, dict):
+                        continue
+
+                    rows.append(row)
+
+                if rows:
+                    tables.append(
+                        (
+                            "Ranking Analysis",
+                            rows,
+                        )
+                    )
+
+        # --------------------------------------------------------
+        # CATEGORICAL ANALYSIS
+        # --------------------------------------------------------
+
+        elif operation == "categorical_analysis":
+
+            counts = operation_result.get("counts")
+
+            if isinstance(counts, dict) and counts:
+
+                rows = [
+                    {
+                        "category": category,
+                        "count": count,
+                    }
+                    for category, count in counts.items()
+                ]
+
+                tables.append(
+                    (
+                        "Category Distribution",
+                        rows,
+                    )
+                )
+
+        # --------------------------------------------------------
+        # STATISTICS
+        # --------------------------------------------------------
+
+        elif operation == "statistics":
+
+            statistics = operation_result.get("statistics")
+
+            if isinstance(statistics, dict) and statistics:
+
+                rows = [
+                    {
+                        "metric": key,
+                        "value": value,
+                    }
+                    for key, value in statistics.items()
+                ]
+
+                tables.append(
+                    (
+                        "Statistical Summary",
+                        rows,
+                    )
+                )
+
+    if not tables:
+        return
+
+    st.markdown("### 📋 Analysis Results")
+
+    for title, rows in tables:
+
+        st.markdown(f"#### {title}")
+
+        display_df = pd.DataFrame(rows)
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# ============================================================
 # BUSINESS INSIGHTS UI
 # ============================================================
 
@@ -442,6 +586,8 @@ def render_conversation_item(item):
 
         if response:
             st.markdown(response)
+
+        render_structured_results(result)
 
         render_business_insights(result)
 
@@ -762,6 +908,12 @@ if user_query:
         )
 
         st.markdown(final_response)
+
+        # ----------------------------------------------------
+        # STRUCTURED ANALYSIS RESULTS
+        # ----------------------------------------------------
+
+        render_structured_results(result)
 
         # ----------------------------------------------------
         # VERIFIED BUSINESS INSIGHTS
