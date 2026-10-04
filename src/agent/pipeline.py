@@ -842,6 +842,7 @@ class AnalysisPipeline:
         self,
         df: pd.DataFrame,
         user_query: str,
+        conversation_history: list[dict] | None = None,
     ) -> Dict[str, Any]:
         """
         Run the complete autonomous analysis pipeline.
@@ -868,10 +869,22 @@ class AnalysisPipeline:
 
         try:
 
-            raw_plan = self.planner.create_plan(
-                user_query=user_query,
-                context=context,
-            )
+            try:
+                raw_plan = self.planner.create_plan(
+                    user_query=user_query,
+                    context=context,
+                    conversation_history=conversation_history,
+                )
+            except TypeError as planner_type_error:
+                # Backward compatibility for test/fake planners
+                # that still implement the older two-argument interface.
+                if "conversation_history" not in str(planner_type_error):
+                    raise
+
+                raw_plan = self.planner.create_plan(
+                    user_query=user_query,
+                    context=context,
+                )
 
         except Exception as e:
 
@@ -1150,12 +1163,26 @@ class AnalysisPipeline:
 
         try:
 
-            final_response = (
-                self.response_generator.generate(
-                    user_query=user_query,
-                    execution_results=execution,
+            try:
+                final_response = (
+                    self.response_generator.generate(
+                        user_query=user_query,
+                        execution_results=execution,
+                        conversation_history=conversation_history,
+                    )
                 )
-            )
+            except TypeError as response_type_error:
+                # Backward compatibility for test/fake response generators
+                # that still implement the older two-argument interface.
+                if "conversation_history" not in str(response_type_error):
+                    raise
+
+                final_response = (
+                    self.response_generator.generate(
+                        user_query=user_query,
+                        execution_results=execution,
+                    )
+                )
 
         except Exception as e:
 

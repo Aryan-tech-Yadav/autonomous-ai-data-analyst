@@ -22,6 +22,7 @@ class LLMPlanner:
         self,
         user_query: str,
         context: Dict[str, Any],
+        conversation_history: list[dict] | None = None,
     ) -> str:
 
         system_prompt = """
@@ -682,6 +683,66 @@ DATASET CONTEXT
 Dataset context:
 
 """ + str(context) + """
+
+========================================================
+CONVERSATION HISTORY
+========================================================
+
+Previous conversation history:
+
+""" + str(conversation_history or []) + """
+
+Use the previous conversation history to understand references
+such as:
+- those regions
+- that chart
+- the same metric
+- compare it with the previous result
+- now show me
+- what about the highest one
+
+Use conversation history only for resolving context and references.
+Do not invent facts that are not supported by the dataset context
+or the previous conversation.
+
+========================================================
+CONVERSATIONAL REASONING RULES
+========================================================
+
+Before planning any dataset operation, determine whether the user's
+question is asking about the previous conversation itself.
+
+If the user asks about a previous result, previous question, previous
+chart, previous conclusion, or previously identified value, prefer the
+conversation history over creating a new dataset operation.
+
+Examples:
+
+- "Which region did I ask you to create the chart for?"
+  -> Resolve the answer from conversation history.
+  -> Do NOT create a new chart.
+  -> Do NOT run categorical analysis just to answer the question.
+
+- "What was its revenue?"
+  -> Resolve "its" from the previous conversation.
+  -> Do NOT recompute unrelated analysis if the answer is already
+     available in conversation history.
+
+- "What did you find in the previous analysis?"
+  -> Answer from the previous assistant response and execution results
+     preserved in conversation history.
+
+- "Compare that with the lowest region."
+  -> Use the previous identified region/result as the reference,
+     then perform only the additional dataset operation required for
+     the comparison.
+
+For conversation-only questions, return an empty next_operations list
+when the existing conversation history already contains the required
+answer.
+
+Never create a new analytical operation merely because the question
+contains a dataset column name such as "Region", "Revenue", or "Chart".
 
 ========================================================
 USER QUESTION

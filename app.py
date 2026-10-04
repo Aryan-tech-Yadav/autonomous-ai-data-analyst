@@ -56,9 +56,8 @@ def extract_chart_paths(result):
     """
 
     execution = result.get(
-        "execution",
-        {},
-    )
+        "execution"
+    ) or {}
 
     execution_results = execution.get(
         "results",
@@ -690,9 +689,18 @@ if user_query:
                 provider=provider
             )
 
+            conversation_history = [
+                {
+                    "user": item.get("query", ""),
+                    "assistant": item.get("response", ""),
+                }
+                for item in st.session_state.conversation
+            ]
+
             result = pipeline.run(
                 df=df,
                 user_query=user_query,
+                conversation_history=conversation_history,
             )
 
         except Exception as exc:

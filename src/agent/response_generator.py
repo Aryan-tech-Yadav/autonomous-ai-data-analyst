@@ -29,6 +29,7 @@ class ResponseGenerator:
         self,
         user_query: str,
         execution_results: Dict[str, Any],
+        conversation_history: list[dict] | None = None,
     ) -> str:
         """
         Generate a concise business-friendly answer.
@@ -41,10 +42,90 @@ class ResponseGenerator:
             execution_results
         )
 
-        if not safe_results:
+        has_analysis_results = bool(
+            isinstance(safe_results, dict)
+            and safe_results.get("results")
+        )
+
+        if not has_analysis_results and not conversation_history:
             return (
                 "I could not generate an answer because "
                 "no analysis results were available."
+            )
+
+        if not has_analysis_results and conversation_history:
+            system_prompt = """
+You are the conversational response engine of an
+autonomous AI data analyst.
+
+The user is asking a follow-up question about a
+previous conversation.
+
+Your job is to answer ONLY from the provided
+conversation history.
+
+STRICT RULES:
+
+1. Resolve references such as "it", "its", "that",
+   "those", "previous", "earlier", and "the highest"
+   using the conversation history.
+
+2. Answer directly and concisely.
+
+3. Use ONLY facts explicitly present in the
+   conversation history.
+
+4. Never invent numbers, rankings, metrics,
+   regions, charts, or conclusions.
+
+5. If the conversation history does not contain
+   enough information to answer, say that the
+   previous conversation does not contain enough
+   information.
+
+6. Do NOT perform new dataset analysis.
+
+7. Do NOT create a chart.
+
+8. Do NOT mention internal planner, executor,
+   pipeline, model, API, or implementation details.
+
+Previous conversation history:
+
+""" + str(conversation_history) + """
+
+Current user question:
+
+""" + user_query
+
+            try:
+                response = self.router.generate(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_prompt,
+                        },
+                        {
+                            "role": "user",
+                            "content": user_query,
+                        },
+                    ],
+                    provider=self.provider,
+                    temperature=0.1,
+                    max_tokens=1024,
+                )
+
+                response = (response or "").strip()
+
+                if response:
+                    return response
+
+            except Exception:
+                pass
+
+            return (
+                "I could not resolve that question from "
+                "the previous conversation."
             )
 
         system_prompt = """
@@ -125,6 +206,15 @@ USER QUESTION:
 {user_query}
 
 
+PREVIOUS CONVERSATION HISTORY:
+
+{json.dumps(
+    conversation_history or [],
+    indent=2,
+    ensure_ascii=False,
+)}
+
+
 EXECUTED ANALYSIS RESULTS:
 
 {json.dumps(
@@ -134,8 +224,20 @@ EXECUTED ANALYSIS RESULTS:
 )}
 
 
-Write the final answer using ONLY the
-executed analysis results above.
+Use the previous conversation history to resolve
+references such as "it", "its", "that", "those",
+"previous", and "earlier".
+
+If the current execution results contain the answer,
+prefer the execution results.
+
+If the current execution results do not contain the
+answer but the previous conversation does, answer
+from the previous conversation.
+
+Do not invent information.
+
+Write ONLY the final natural-language answer.
 """
 
         messages = [

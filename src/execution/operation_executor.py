@@ -545,6 +545,36 @@ class OperationExecutor:
                 )
             )
 
+            allowed_operations = {
+                "generate_bar_chart",
+                "generate_line_chart",
+                "calculate_revenue",
+                "revenue_calculation",
+                "revenue_calculations",
+                "create_shifted_column",
+                "calculate_percentage_change",
+                "groupby_aggregation",
+                "statistics",
+                "categorical_analysis",
+                "find_max",
+                "rank_by_value",
+                "compare_columns",
+            }
+
+            if normalized_operation not in allowed_operations:
+                self.results.append(
+                    {
+                        "step": step_number,
+                        "operation": normalized_operation,
+                        "status": "error",
+                        "error": (
+                            "Operation is not allowed: "
+                            f"{normalized_operation}"
+                        ),
+                    }
+                )
+                continue
+
             try:
 
                 # ==========================================
