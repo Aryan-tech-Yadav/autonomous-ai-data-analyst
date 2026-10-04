@@ -102,6 +102,60 @@ def extract_insights(result):
 
 
 # ============================================================
+# DATASET OVERVIEW
+# ============================================================
+
+def render_dataset_overview(df):
+    """Render verified dataset quality and size metrics."""
+
+    if df is None or df.empty:
+        return
+
+    rows, columns = df.shape
+
+    missing_cells = int(df.isna().sum().sum())
+    duplicate_rows = int(df.duplicated().sum())
+
+    total_cells = rows * columns
+
+    if total_cells > 0:
+        missing_percentage = (
+            missing_cells / total_cells
+        ) * 100
+    else:
+        missing_percentage = 0.0
+
+    st.markdown("### 📊 Dataset Overview")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "Rows",
+            f"{rows:,}",
+        )
+
+    with col2:
+        st.metric(
+            "Columns",
+            f"{columns:,}",
+        )
+
+    with col3:
+        st.metric(
+            "Missing Cells",
+            f"{missing_cells:,}",
+            f"{missing_percentage:.1f}%",
+            delta_color="inverse",
+        )
+
+    with col4:
+        st.metric(
+            "Duplicate Rows",
+            f"{duplicate_rows:,}",
+        )
+
+# ============================================================
 # BUSINESS INSIGHTS UI
 # ============================================================
 
@@ -586,6 +640,12 @@ df = st.session_state.dataset
 st.success(
     f"Dataset ready: `{st.session_state.dataset_name}`"
 )
+
+# ============================================================
+# DATASET OVERVIEW
+# ============================================================
+
+render_dataset_overview(df)
 
 
 # ============================================================
