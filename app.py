@@ -35,92 +35,201 @@ if "analysis_count" not in st.session_state:
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# DATA LOADING
 # ============================================================
 
 def load_uploaded_file(uploaded_file):
-    """
-    Load CSV or Excel file into a DataFrame.
-    """
+    """Load CSV or Excel into a DataFrame."""
 
     if uploaded_file.name.lower().endswith(".csv"):
-
         return pd.read_csv(uploaded_file)
 
     return pd.read_excel(uploaded_file)
 
 
+# ============================================================
+# RESULT HELPERS
+# ============================================================
+
 def extract_chart_paths(result):
-    """
-    Extract generated chart paths from pipeline execution.
-    """
+    """Extract generated chart paths from execution results."""
 
-    execution = result.get(
-        "execution"
-    ) or {}
-
-    execution_results = execution.get(
-        "results",
-        [],
-    )
+    execution = result.get("execution") or {}
+    execution_results = execution.get("results", [])
 
     chart_paths = []
 
-    for execution_result in execution_results:
+    for item in execution_results:
 
-        if execution_result.get(
-            "status"
-        ) != "success":
-
+        if item.get("status") != "success":
             continue
 
-        operation = execution_result.get(
-            "operation"
-        )
+        operation = item.get("operation")
 
         if operation not in {
             "generate_bar_chart",
             "generate_line_chart",
         }:
-
             continue
 
-        operation_result = (
-            execution_result.get(
-                "result",
-                {},
-            )
-        )
+        operation_result = item.get("result") or {}
 
-        output_path = (
-            operation_result.get(
-                "output_path"
-            )
-        )
+        output_path = operation_result.get("output_path")
 
         if output_path:
-
-            chart_paths.append(
-                output_path
-            )
+            chart_paths.append(output_path)
 
     return chart_paths
 
 
+def extract_insights(result):
+    """
+    Extract verified business insights from the pipeline.
+
+    Pipeline structure:
+        result["insights"]["insights"]
+    """
+
+    insights_wrapper = result.get("insights") or {}
+
+    if isinstance(insights_wrapper, dict):
+        insights = insights_wrapper.get("insights", [])
+
+        if isinstance(insights, list):
+            return insights
+
+    return []
+
+
+# ============================================================
+# BUSINESS INSIGHTS UI
+# ============================================================
+
+def render_business_insights(result):
+    """Render deterministic business insights."""
+
+    insights = extract_insights(result)
+
+    if not insights:
+        return
+
+    st.markdown("### 💡 Key Business Insights")
+
+    highest = [
+        item
+        for item in insights
+        if item.get("type") == "highest_performer"
+    ]
+
+    lowest = [
+        item
+        for item in insights
+        if item.get("type") == "lowest_performer"
+    ]
+
+    gap = [
+        item
+        for item in insights
+        if item.get("type") == "performance_gap"
+    ]
+
+    cards = []
+
+    if highest:
+        item = highest[0]
+        cards.append(
+            (
+                "🏆 Highest Performer",
+                item.get("group", "Unknown"),
+                item.get("value"),
+            )
+        )
+
+    if lowest:
+        item = lowest[0]
+        cards.append(
+            (
+                "📉 Lowest Performer",
+                item.get("group", "Unknown"),
+                item.get("value"),
+            )
+        )
+
+    if gap:
+        item = gap[0]
+        cards.append(
+            (
+                "📊 Performance Gap",
+                "Highest vs Lowest",
+                item.get("value"),
+            )
+        )
+
+    if cards:
+
+        columns = st.columns(len(cards))
+
+        for column, (title, label, value) in zip(
+            columns,
+            cards,
+        ):
+
+            with column:
+
+                st.markdown(
+                    f"**{title}**"
+                )
+
+                if isinstance(value, (int, float)):
+
+                    st.metric(
+                        label,
+                        f"{value:,.2f}",
+                    )
+
+                else:
+
+                    st.metric(
+                        label,
+                        str(value),
+                    )
+
+    st.markdown("#### Insight Details")
+
+    for item in insights:
+
+        message = item.get(
+            "message",
+            "Business insight available.",
+        )
+
+        insight_type = item.get(
+            "type",
+            "insight",
+        )
+
+        if insight_type == "highest_performer":
+            st.success(f"🏆 {message}")
+
+        elif insight_type == "lowest_performer":
+            st.warning(f"📉 {message}")
+
+        elif insight_type == "performance_gap":
+            st.info(f"📊 {message}")
+
+        else:
+            st.info(f"💡 {message}")
+
+
+# ============================================================
+# EXECUTION SUMMARY
+# ============================================================
+
 def render_execution_summary(result):
-    """
-    Render compact execution summary.
-    """
+    """Render execution metrics."""
 
-    execution = result.get(
-        "execution",
-        {},
-    )
-
-    execution_results = execution.get(
-        "results",
-        [],
-    )
+    execution = result.get("execution") or {}
+    execution_results = execution.get("results", [])
 
     if not execution_results:
         return
@@ -137,53 +246,51 @@ def render_execution_summary(result):
         if item.get("status") != "success"
     )
 
-    summary_1, summary_2, summary_3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
 
-    with summary_1:
-
+    with col1:
         st.metric(
             "Operations",
             len(execution_results),
         )
 
-    with summary_2:
-
+    with col2:
         st.metric(
             "Successful",
             successful_steps,
         )
 
-    with summary_3:
-
+    with col3:
         st.metric(
             "Failed",
             failed_steps,
         )
 
 
+# ============================================================
+# CHARTS
+# ============================================================
+
 def render_charts(chart_paths):
-    """
-    Render generated charts.
-    """
+    """Render generated charts."""
 
     if not chart_paths:
         return
 
-    st.markdown("#### 📊 Visualization")
+    st.markdown("### 📊 Visualizations")
 
     for index, chart_path in enumerate(
         chart_paths,
         start=1,
     ):
 
-        path = Path(
-            chart_path
-        )
+        path = Path(chart_path)
 
         if path.exists():
 
             st.image(
                 str(path),
+                caption=f"Generated chart {index}",
                 use_container_width=True,
             )
 
@@ -196,20 +303,15 @@ def render_charts(chart_paths):
             )
 
 
+# ============================================================
+# EXECUTION OPERATIONS
+# ============================================================
+
 def render_execution_operations(result):
-    """
-    Render executed operation names.
-    """
+    """Show executed operations."""
 
-    execution = result.get(
-        "execution",
-        {},
-    )
-
-    execution_results = execution.get(
-        "results",
-        [],
-    )
+    execution = result.get("execution") or {}
+    execution_results = execution.get("results", [])
 
     if not execution_results:
         return
@@ -229,12 +331,12 @@ def render_execution_operations(result):
                 "unknown",
             )
 
-            operation_status = item.get(
+            status = item.get(
                 "status",
                 "unknown",
             )
 
-            if operation_status == "success":
+            if status == "success":
 
                 st.success(
                     f"{index}. `{operation}` → success"
@@ -243,92 +345,63 @@ def render_execution_operations(result):
             else:
 
                 st.error(
-                    f"{index}. `{operation}` → "
-                    f"{operation_status}"
+                    f"{index}. `{operation}` → {status}"
                 )
 
 
-def render_conversation_item(item, index):
-    """
-    Render one previous analysis in the conversation.
-    """
+# ============================================================
+# CONVERSATION RENDERING
+# ============================================================
 
-    query = item.get(
-        "query",
-        "",
-    )
+def render_conversation_item(item):
+    """Render one previous analysis."""
 
-    response = item.get(
-        "response",
-        "",
-    )
+    query = item.get("query", "")
+    response = item.get("response", "")
+    result = item.get("result") or {}
+    chart_paths = item.get("chart_paths", [])
 
-    result = item.get(
-        "result",
-        {},
-    )
-
-    chart_paths = item.get(
-        "chart_paths",
-        [],
-    )
-
-    status = result.get(
-        "status"
-    )
+    status = result.get("status")
 
     with st.chat_message("user"):
-
-        st.markdown(
-            query
-        )
+        st.markdown(query)
 
     with st.chat_message("assistant"):
 
         if status == "success":
-
             st.success(
                 "Analysis completed successfully."
             )
 
-        elif status == "partial":
-
+        elif status in {
+            "partial",
+            "partial_success",
+        }:
             st.warning(
                 "Analysis completed with some errors."
             )
 
         else:
-
             st.error(
                 "Analysis failed."
             )
 
         if response:
+            st.markdown(response)
 
-            st.markdown(
-                response
-            )
+        render_business_insights(result)
 
-        render_charts(
-            chart_paths
-        )
+        render_charts(chart_paths)
 
-        render_execution_summary(
-            result
-        )
+        render_execution_summary(result)
 
-        render_execution_operations(
-            result
-        )
+        render_execution_operations(result)
 
         with st.expander(
             "🔍 Analysis Details",
             expanded=False,
         ):
-
-            st.json(
-                result
-            )
+            st.json(result)
 
 
 # ============================================================
@@ -341,8 +414,9 @@ st.title(
 
 st.markdown(
     """
-Upload a CSV or Excel business file and have an autonomous AI
-plan, execute, analyze, visualize, and explain your data.
+Upload a CSV or Excel business file and let an autonomous AI
+system **plan, execute, analyze, visualize, and explain**
+your data.
 """
 )
 
@@ -353,56 +427,54 @@ plan, execute, analyze, visualize, and explain your data.
 
 with st.sidebar:
 
-    st.header(
-        "⚙️ Configuration"
-    )
+    st.header("⚙️ Configuration")
 
     provider = st.selectbox(
         "LLM Provider",
-        options=[
-            "nvidia",
-        ],
+        options=["nvidia"],
         index=0,
     )
 
     st.divider()
 
-    st.markdown(
-        "### 🤖 AI Engine"
-    )
+    st.markdown("### 🤖 AI Engine")
 
     st.info(
-        "Nemotron is currently configured as the "
-        "primary analysis model."
+        "NVIDIA Nemotron is currently configured as "
+        "the primary analysis model."
     )
 
     st.divider()
 
     if st.session_state.dataset is not None:
 
-        st.markdown(
-            "### 📁 Current Dataset"
-        )
+        st.markdown("### 📁 Current Dataset")
 
         st.caption(
             st.session_state.dataset_name
         )
 
-        st.metric(
-            "Rows",
-            f"{st.session_state.dataset.shape[0]:,}",
+        rows, columns = (
+            st.session_state.dataset.shape
         )
 
-        st.metric(
-            "Columns",
-            f"{st.session_state.dataset.shape[1]:,}",
-        )
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric(
+                "Rows",
+                f"{rows:,}",
+            )
+
+        with col2:
+            st.metric(
+                "Columns",
+                f"{columns:,}",
+            )
 
         st.divider()
 
-        st.markdown(
-            "### 💬 Session"
-        )
+        st.markdown("### 💬 Session")
 
         st.metric(
             "Analyses",
@@ -422,7 +494,7 @@ with st.sidebar:
     st.divider()
 
     st.caption(
-        "Upload → Plan → Execute → Analyze → Explain"
+        "Upload → Plan → Execute → Recover → Insight → Explain"
     )
 
 
@@ -430,16 +502,11 @@ with st.sidebar:
 # FILE UPLOAD
 # ============================================================
 
-st.subheader(
-    "📁 Upload Business Data"
-)
+st.subheader("📁 Upload Business Data")
 
 uploaded_file = st.file_uploader(
     "Choose a CSV or Excel file",
-    type=[
-        "csv",
-        "xlsx",
-    ],
+    type=["csv", "xlsx"],
 )
 
 
@@ -495,11 +562,13 @@ else:
 ### What this system can do
 
 - 📊 Analyze business datasets
-- 🔢 Calculate metrics
+- 🔢 Calculate business metrics
 - 🧮 Perform aggregations
-- 🏆 Find highest/lowest values
-- 📈 Generate charts
+- 🏆 Find highest/lowest performers
+- 📈 Generate visualizations
 - 🤖 Automatically plan analysis steps
+- 🔄 Recover from execution failures
+- 💡 Detect verified business insights
 - 🧠 Generate business-friendly explanations
 - 💬 Continue asking questions about the same dataset
 """
@@ -514,58 +583,13 @@ else:
 
 df = st.session_state.dataset
 
-
 st.success(
     f"Dataset ready: `{st.session_state.dataset_name}`"
 )
 
 
 # ============================================================
-# DATASET METRICS
-# ============================================================
-
-row_count = df.shape[0]
-column_count = df.shape[1]
-missing_count = int(
-    df.isna().sum().sum()
-)
-duplicate_count = int(
-    df.duplicated().sum()
-)
-
-metric_1, metric_2, metric_3, metric_4 = st.columns(4)
-
-with metric_1:
-
-    st.metric(
-        "Rows",
-        f"{row_count:,}",
-    )
-
-with metric_2:
-
-    st.metric(
-        "Columns",
-        f"{column_count:,}",
-    )
-
-with metric_3:
-
-    st.metric(
-        "Missing Values",
-        f"{missing_count:,}",
-    )
-
-with metric_4:
-
-    st.metric(
-        "Duplicate Rows",
-        f"{duplicate_count:,}",
-    )
-
-
-# ============================================================
-# DATA PREVIEW
+# DATASET PREVIEW
 # ============================================================
 
 with st.expander(
@@ -580,193 +604,114 @@ with st.expander(
 
 
 # ============================================================
-# COLUMN INFORMATION
-# ============================================================
-
-with st.expander(
-    "🧱 Dataset Columns",
-    expanded=False,
-):
-
-    column_info = pd.DataFrame(
-        {
-            "Column": df.columns,
-            "Data Type": [
-                str(dtype)
-                for dtype in df.dtypes
-            ],
-            "Missing": [
-                int(
-                    df[column].isna().sum()
-                )
-                for column in df.columns
-            ],
-            "Unique": [
-                int(
-                    df[column].nunique(
-                        dropna=True
-                    )
-                )
-                for column in df.columns
-            ],
-        }
-    )
-
-    st.dataframe(
-        column_info,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
-# ============================================================
-# CONVERSATION HISTORY
+# ANALYSIS HISTORY
 # ============================================================
 
 if st.session_state.conversation:
 
-    st.subheader(
-        "💬 Analysis Conversation"
-    )
+    st.markdown("## 💬 Analysis History")
 
-    for index, item in enumerate(
-        st.session_state.conversation,
-        start=1,
-    ):
-
-        render_conversation_item(
-            item,
-            index,
-        )
+    for item in st.session_state.conversation:
+        render_conversation_item(item)
 
 
 # ============================================================
-# NEW QUESTION
+# CURRENT QUERY
 # ============================================================
 
-st.subheader(
-    "💬 Ask Your Data"
-)
+st.markdown("## 🔎 Ask Your Data Analyst")
 
 user_query = st.chat_input(
-    "Ask a question about your dataset..."
+    "Ask a business question about your dataset..."
 )
 
 
 # ============================================================
-# ANALYSIS
+# ANALYSIS EXECUTION
 # ============================================================
 
 if user_query:
 
-    user_query = user_query.strip()
-
-    if not user_query:
-
-        st.warning(
-            "Please enter a question first."
-        )
-
-        st.stop()
-
     with st.chat_message("user"):
-
-        st.markdown(
-            user_query
-        )
+        st.markdown(user_query)
 
     with st.chat_message("assistant"):
 
-        progress_container = st.empty()
+        with st.spinner(
+            "🤖 Autonomous analyst is working..."
+        ):
 
-        progress_container.info(
-            "🤖 AI is planning and executing your analysis..."
-        )
+            try:
 
-        try:
+                pipeline = AnalysisPipeline(
+                    provider=provider
+                )
 
-            pipeline = AnalysisPipeline(
-                provider=provider
-            )
+                result = pipeline.run(
+                    df=df,
+                    user_query=user_query,
+                    conversation_history=[
+                        {
+                            "query": item.get(
+                                "query",
+                                "",
+                            ),
+                            "response": item.get(
+                                "response",
+                                "",
+                            ),
+                        }
+                        for item in st.session_state.conversation
+                    ],
+                )
 
-            conversation_history = [
-                {
-                    "user": item.get("query", ""),
-                    "assistant": item.get("response", ""),
-                }
-                for item in st.session_state.conversation
-            ]
+            except Exception as exc:
 
-            result = pipeline.run(
-                df=df,
-                user_query=user_query,
-                conversation_history=conversation_history,
-            )
+                st.error(
+                    f"Unexpected application error: {exc}"
+                )
 
-        except Exception as exc:
+                st.stop()
 
-            progress_container.empty()
-
-            st.error(
-                f"Analysis failed: {exc}"
-            )
-
-            st.stop()
-
-        progress_container.empty()
-
-
-        # ====================================================
-        # PIPELINE STATUS
-        # ====================================================
-
-        status = result.get(
-            "status"
-        )
+        status = result.get("status")
 
         if status == "success":
 
             st.success(
-                "✅ Analysis completed successfully."
+                "Analysis completed successfully."
             )
 
-        elif status == "partial":
+        elif status in {
+            "partial",
+            "partial_success",
+        }:
 
             st.warning(
-                "⚠️ Analysis completed with some errors."
+                "Analysis completed with some errors."
             )
 
         else:
 
             st.error(
-                "❌ Analysis failed."
+                "Analysis failed."
             )
 
-
-        # ====================================================
-        # FINAL RESPONSE
-        # ====================================================
-
-        final_response = result.get(
-            "final_response"
+        final_response = (
+            result.get("final_response")
+            or "No final response was generated."
         )
 
-        if final_response:
+        st.markdown(final_response)
 
-            st.markdown(
-                final_response
-            )
+        # ----------------------------------------------------
+        # VERIFIED BUSINESS INSIGHTS
+        # ----------------------------------------------------
 
-        else:
+        render_business_insights(result)
 
-            st.warning(
-                "No final AI response was generated."
-            )
-
-
-        # ====================================================
+        # ----------------------------------------------------
         # CHARTS
-        # ====================================================
+        # ----------------------------------------------------
 
         chart_paths = extract_chart_paths(
             result
@@ -776,42 +721,36 @@ if user_query:
             chart_paths
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # EXECUTION SUMMARY
-        # ====================================================
+        # ----------------------------------------------------
 
         render_execution_summary(
             result
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # EXECUTION OPERATIONS
-        # ====================================================
+        # ----------------------------------------------------
 
         render_execution_operations(
             result
         )
 
-
-        # ====================================================
-        # ANALYSIS DETAILS
-        # ====================================================
+        # ----------------------------------------------------
+        # DETAILS
+        # ----------------------------------------------------
 
         with st.expander(
             "🔍 Analysis Details",
             expanded=False,
         ):
 
-            st.json(
-                result
-            )
+            st.json(result)
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # SAVE CONVERSATION
-    # ========================================================
+    # --------------------------------------------------------
 
     st.session_state.conversation.append(
         {
@@ -825,15 +764,3 @@ if user_query:
     st.session_state.analysis_count += 1
 
     st.rerun()
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "Autonomous AI Data Analyst • "
-    "Nemotron-powered autonomous analysis"
-)
