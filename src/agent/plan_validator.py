@@ -412,6 +412,17 @@ def _validate_chart_step(
     warnings: List[str],
     derived_columns: set[str] | None = None,
 ) -> List[str]:
+    """
+    Validate chart operations using the canonical chart parameter contract.
+
+    Canonical chart parameters:
+        Bar chart  -> x_column, y_column
+        Line chart -> x_column, y_column
+
+    Older aliases category_column/value_column are accepted for
+    compatibility, but validation is performed against the canonical
+    x/y representation.
+    """
 
     errors = []
 
@@ -427,205 +438,125 @@ def _validate_chart_step(
         {},
     )
 
-    if not isinstance(
-        parameters,
-        dict,
-    ):
-
+    if not isinstance(parameters, dict):
         return [
             f"Chart operation '{operation}' "
             "must contain a parameters object."
         ]
 
-    if operation in {
-        "generate_bar_chart",
-        "bar_chart",
-        "chart_generator",
-    }:
+    # ----------------------------------------------------------
+    # Canonical chart parameter names
+    # ----------------------------------------------------------
 
-        category_column = parameters.get(
-            "category_column"
+    x_column = (
+        parameters.get("x_column")
+        or parameters.get("category_column")
+    )
+
+    y_column = (
+        parameters.get("y_column")
+        or parameters.get("value_column")
+    )
+
+    # ----------------------------------------------------------
+    # Required parameters
+    # ----------------------------------------------------------
+
+    if not x_column:
+        chart_type = (
+            "Bar"
+            if operation in {
+                "generate_bar_chart",
+                "bar_chart",
+                "chart_generator",
+            }
+            else "Line"
         )
 
-        value_column = parameters.get(
-            "value_column"
+        errors.append(
+            f"{chart_type} chart requires 'x_column'."
         )
 
-        if not category_column:
-            errors.append(
-                "Bar chart requires "
-                "'category_column'."
-            )
-
-        if not value_column:
-            errors.append(
-                "Bar chart requires "
-                "'value_column'."
-            )
-
-        if category_column:
-
-            if not isinstance(
-                category_column,
-                str,
-            ):
-
-                errors.append(
-                    "'category_column' must be "
-                    "a string."
-                )
-
-            elif not (
-                _column_exists(
-                    category_column,
-                    actual_columns,
-                )
-                or _column_exists(
-                    category_column,
-                    list(derived_columns),
-                )
-            ):
-
-                errors.append(
-                    f"Chart category column "
-                    f"'{category_column}' does not "
-                    "exist."
-                )
-
-        if value_column:
-
-            if not isinstance(
-                value_column,
-                str,
-            ):
-
-                errors.append(
-                    "'value_column' must be "
-                    "a string."
-                )
-
-            elif _is_derived_revenue(
-                value_column
-            ):
-
-                warnings.append(
-                    f"Chart value column "
-                    f"'{value_column}' is a "
-                    "derived revenue column."
-                )
-
-            elif not (
-                _column_exists(
-                    value_column,
-                    actual_columns,
-                )
-                or _column_exists(
-                    value_column,
-                    list(derived_columns),
-                )
-            ):
-
-                errors.append(
-                    f"Chart value column "
-                    f"'{value_column}' does not "
-                    "exist."
-                )
-
-    elif operation in {
-        "generate_line_chart",
-        "line_chart",
-    }:
-
-        x_column = parameters.get(
-            "x_column"
+    if not y_column:
+        chart_type = (
+            "Bar"
+            if operation in {
+                "generate_bar_chart",
+                "bar_chart",
+                "chart_generator",
+            }
+            else "Line"
         )
 
-        y_column = parameters.get(
-            "y_column"
+        errors.append(
+            f"{chart_type} chart requires 'y_column'."
         )
 
-        if not x_column:
+    # ----------------------------------------------------------
+    # X column validation
+    # ----------------------------------------------------------
+
+    if x_column:
+
+        if not isinstance(x_column, str):
+
             errors.append(
-                "Line chart requires "
-                "'x_column'."
+                "'x_column' must be a string."
             )
 
-        if not y_column:
-            errors.append(
-                "Line chart requires "
-                "'y_column'."
-            )
-
-        if x_column:
-
-            if not isinstance(
+        elif not (
+            _column_exists(
                 x_column,
-                str,
-            ):
+                actual_columns,
+            )
+            or _column_exists(
+                x_column,
+                list(derived_columns),
+            )
+        ):
 
-                errors.append(
-                    "'x_column' must be "
-                    "a string."
-                )
+            errors.append(
+                f"Chart X column "
+                f"'{x_column}' does not exist."
+            )
 
-            elif not (
-                _column_exists(
-                    x_column,
-                    actual_columns,
-                )
-                or _column_exists(
-                    x_column,
-                    list(derived_columns),
-                )
-            ):
+    # ----------------------------------------------------------
+    # Y column validation
+    # ----------------------------------------------------------
 
-                errors.append(
-                    f"Chart X column "
-                    f"'{x_column}' does not "
-                    "exist."
-                )
+    if y_column:
 
-        if y_column:
+        if not isinstance(y_column, str):
 
-            if not isinstance(
+            errors.append(
+                "'y_column' must be a string."
+            )
+
+        elif _is_derived_revenue(y_column):
+
+            warnings.append(
+                f"Chart Y column "
+                f"'{y_column}' is a "
+                "derived revenue column."
+            )
+
+        elif not (
+            _column_exists(
                 y_column,
-                str,
-            ):
+                actual_columns,
+            )
+            or _column_exists(
+                y_column,
+                list(derived_columns),
+            )
+        ):
 
-                errors.append(
-                    "'y_column' must be "
-                    "a string."
-                )
-
-            elif _is_derived_revenue(
-                y_column
-            ):
-
-                warnings.append(
-                    f"Chart Y column "
-                    f"'{y_column}' is a "
-                    "derived revenue column."
-                )
-
-            elif not (
-                _column_exists(
-                    y_column,
-                    actual_columns,
-                )
-                or _column_exists(
-                    y_column,
-                    list(derived_columns),
-                )
-            ):
-
-                errors.append(
-                    f"Chart Y column "
-                    f"'{y_column}' does not "
-                    "exist."
-                )
+            errors.append(
+                f"Chart Y column "
+                f"'{y_column}' does not exist."
+            )
 
     return errors
-
 
 def normalize_plan(plan):
     """
