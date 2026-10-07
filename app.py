@@ -295,7 +295,7 @@ def render_structured_results(result):
 
         st.dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -304,121 +304,289 @@ def render_structured_results(result):
 # ============================================================
 
 def render_business_insights(result):
-    """Render deterministic business insights."""
+    """Render deterministic business insights from the pipeline."""
 
-    insights = extract_insights(result)
+    insights_data = result.get("insights") or {}
 
-    if not insights:
+    if not isinstance(insights_data, dict):
         return
 
-    st.markdown("### 💡 Key Business Insights")
+    insights = insights_data.get("insights", [])
 
-    highest = [
-        item
-        for item in insights
-        if item.get("type") == "highest_performer"
-    ]
+    if not isinstance(insights, list) or not insights:
+        return
 
-    lowest = [
-        item
-        for item in insights
-        if item.get("type") == "lowest_performer"
-    ]
+    st.markdown("### 💡 Business Insights")
 
-    gap = [
-        item
-        for item in insights
-        if item.get("type") == "performance_gap"
-    ]
+    for insight in insights:
 
-    cards = []
+        if not isinstance(insight, dict):
+            continue
 
-    if highest:
-        item = highest[0]
-        cards.append(
-            (
-                "🏆 Highest Performer",
-                item.get("group", "Unknown"),
-                item.get("value"),
-            )
-        )
+        message = insight.get("message")
 
-    if lowest:
-        item = lowest[0]
-        cards.append(
-            (
-                "📉 Lowest Performer",
-                item.get("group", "Unknown"),
-                item.get("value"),
-            )
-        )
+        if not message:
+            continue
 
-    if gap:
-        item = gap[0]
-        cards.append(
-            (
-                "📊 Performance Gap",
-                "Highest vs Lowest",
-                item.get("value"),
-            )
-        )
+        insight_type = str(
+            insight.get("type", "")
+        ).lower()
 
-    if cards:
+        if "highest" in insight_type or "maximum" in insight_type:
+            st.success(f"📈 {message}")
 
-        columns = st.columns(len(cards))
-
-        for column, (title, label, value) in zip(
-            columns,
-            cards,
-        ):
-
-            with column:
-
-                st.markdown(
-                    f"**{title}**"
-                )
-
-                if isinstance(value, (int, float)):
-
-                    st.metric(
-                        label,
-                        f"{value:,.2f}",
-                    )
-
-                else:
-
-                    st.metric(
-                        label,
-                        str(value),
-                    )
-
-    st.markdown("#### Insight Details")
-
-    for item in insights:
-
-        message = item.get(
-            "message",
-            "Business insight available.",
-        )
-
-        insight_type = item.get(
-            "type",
-            "insight",
-        )
-
-        if insight_type == "highest_performer":
-            st.success(f"🏆 {message}")
-
-        elif insight_type == "lowest_performer":
+        elif "lowest" in insight_type:
             st.warning(f"📉 {message}")
 
-        elif insight_type == "performance_gap":
-            st.info(f"📊 {message}")
+        elif "decrease" in message.lower():
+            st.warning(f"📊 {message}")
+
+        elif "increase" in message.lower():
+            st.success(f"📊 {message}")
 
         else:
-            st.info(f"💡 {message}")
+            st.info(f"🔎 {message}")
 
 
+# ============================================================
+# STRUCTURED ANALYSIS RESULTS
+# ============================================================
+
+def render_structured_results(result):
+    """Render verified tabular results from executed operations."""
+
+    execution = result.get("execution") or {}
+    execution_results = execution.get("results", [])
+
+    group_rows = []
+    ranking_rows = []
+    other_tables = []
+
+    for item in execution_results:
+
+        if item.get("status") != "success":
+            continue
+
+        operation = item.get("operation", "")
+        operation_result = item.get("result") or {}
+
+        if not isinstance(operation_result, dict):
+            continue
+
+        # --------------------------------------------------------
+        # GROUPBY / AGGREGATION
+        # --------------------------------------------------------
+
+        if operation in {
+            "groupby_aggregation",
+            "groupby_aggregate",
+            "group_by",
+        }:
+
+            results = operation_result.get("results")
+
+            if isinstance(results, list) and results:
+
+                for row in results:
+
+                    if isinstance(row, dict):
+                        group_rows.append(row)
+
+        # --------------------------------------------------------
+        # RANKING
+        # --------------------------------------------------------
+
+        elif operation == "rank_by_value":
+
+            results = operation_result.get("results")
+
+            if isinstance(results, list) and results:
+
+                ascending = bool(
+                    operation_result.get(
+                        "ascending",
+                        False,
+                    )
+                )
+
+                direction = (
+                    "Lowest"
+                    if ascending
+                    else "Highest"
+                )
+
+                for row in results:
+
+                    if not isinstance(row, dict):
+                        continue
+
+                    ranking_rows.append(
+                        {
+                            "Direction": direction,
+                            "Rank": row.get("rank"),
+                            "Region": row.get(
+                                "group",
+                                row.get(
+                                    "Region",
+                                    "—",
+                                ),
+                            ),
+                            "Value": row.get(
+                                "value",
+                                row.get(
+                                    "Revenue",
+                                    "—",
+                                ),
+                            ),
+                        }
+                    )
+
+        # --------------------------------------------------------
+        # CATEGORICAL ANALYSIS
+        # --------------------------------------------------------
+
+        elif operation == "categorical_analysis":
+
+            counts = operation_result.get("counts")
+
+            if isinstance(counts, dict) and counts:
+
+                rows = [
+                    {
+                        "Category": category,
+                        "Count": count,
+                    }
+                    for category, count in counts.items()
+                ]
+
+                other_tables.append(
+                    (
+                        "Category Distribution",
+                        rows,
+                    )
+                )
+
+        # --------------------------------------------------------
+        # STATISTICS
+        # --------------------------------------------------------
+
+        elif operation == "statistics":
+
+            statistics = operation_result.get(
+                "statistics"
+            )
+
+            if isinstance(statistics, dict) and statistics:
+
+                rows = [
+                    {
+                        "Metric": key,
+                        "Value": value,
+                    }
+                    for key, value in statistics.items()
+                ]
+
+                other_tables.append(
+                    (
+                        "Statistical Summary",
+                        rows,
+                    )
+                )
+
+    # ------------------------------------------------------------
+    # NOTHING TO DISPLAY
+    # ------------------------------------------------------------
+
+    if (
+        not group_rows
+        and not ranking_rows
+        and not other_tables
+    ):
+        return
+
+    st.markdown("### 📋 Analysis Results")
+
+    # ------------------------------------------------------------
+    # REGIONAL / GROUP ANALYSIS
+    # ------------------------------------------------------------
+
+    if group_rows:
+
+        display_df = pd.DataFrame(
+            group_rows
+        ).drop_duplicates()
+
+        numeric_columns = [
+            column
+            for column in display_df.columns
+            if pd.api.types.is_numeric_dtype(
+                display_df[column]
+            )
+        ]
+
+        if numeric_columns:
+
+            value_column = numeric_columns[-1]
+
+            display_df = display_df.sort_values(
+                by=value_column,
+                ascending=False,
+                kind="stable",
+            )
+
+        st.markdown(
+            "#### 🌎 Regional / Group Analysis"
+        )
+
+        st.dataframe(
+            display_df,
+            width="stretch",
+            hide_index=True,
+        )
+
+    # ------------------------------------------------------------
+    # PERFORMANCE HIGHLIGHTS
+    # ------------------------------------------------------------
+
+    if ranking_rows:
+
+        ranking_df = pd.DataFrame(
+            ranking_rows
+        ).drop_duplicates(
+            subset=[
+                "Direction",
+                "Region",
+                "Value",
+            ]
+        )
+
+        st.markdown(
+            "#### 🏆 Performance Highlights"
+        )
+
+        st.dataframe(
+            ranking_df,
+            width="stretch",
+            hide_index=True,
+        )
+
+    # ------------------------------------------------------------
+    # OTHER STRUCTURED RESULTS
+    # ------------------------------------------------------------
+
+    for title, rows in other_tables:
+
+        st.markdown(
+            f"#### {title}"
+        )
+
+        display_df = pd.DataFrame(rows)
+
+        st.dataframe(
+            display_df,
+            width="stretch",
+            hide_index=True,
+        )
 # ============================================================
 # EXECUTION SUMMARY
 # ============================================================
@@ -489,7 +657,7 @@ def render_charts(chart_paths):
             st.image(
                 str(path),
                 caption=f"Generated chart {index}",
-                use_container_width=True,
+                width="stretch",
             )
 
         else:
@@ -683,7 +851,7 @@ with st.sidebar:
 
         if st.button(
             "🗑️ Clear Conversation",
-            use_container_width=True,
+            width="stretch",
         ):
 
             st.session_state.conversation = []
@@ -805,7 +973,7 @@ with st.expander(
 
     st.dataframe(
         df.head(20),
-        use_container_width=True,
+        width="stretch",
     )
 
 

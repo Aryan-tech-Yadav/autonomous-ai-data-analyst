@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from src.tools.registry import get_operation
+from src.tools.operations import create_trend_chart_data
 
 
 DERIVED_REVENUE_ALIASES = {
@@ -32,13 +33,6 @@ def _is_derived_revenue_column(value: Any) -> bool:
 
 
 class OperationExecutor:
-    """
-    Execute validated analysis operations sequentially.
-
-    A working DataFrame is maintained across all steps so
-    derived columns created by earlier operations can be
-    consumed by later operations.
-    """
 
     def __init__(self):
         self.results: List[Dict[str, Any]] = []
@@ -54,14 +48,6 @@ class OperationExecutor:
         price_column: str = "Unit Price",
         output_column: str = "Revenue",
     ) -> pd.DataFrame:
-        """
-        Ensure a usable revenue column exists.
-
-        Important:
-        If the requested revenue column already exists but
-        contains only missing values, it MUST be overwritten
-        with calculated revenue.
-        """
 
         working_df = df.copy()
 
@@ -75,8 +61,6 @@ class OperationExecutor:
                 f"Price column '{price_column}' does not exist."
             )
 
-        # If an existing revenue column contains usable data,
-        # preserve it.
         if output_column in working_df.columns:
 
             existing_revenue = pd.to_numeric(
@@ -85,6 +69,7 @@ class OperationExecutor:
             )
 
             if existing_revenue.notna().sum() > 0:
+                working_df[output_column] = existing_revenue
                 return working_df
 
         units = pd.to_numeric(
@@ -97,9 +82,6 @@ class OperationExecutor:
             errors="coerce",
         )
 
-        # IMPORTANT:
-        # Always assign the calculated values when the existing
-        # column is empty.
         working_df[output_column] = units * price
 
         return working_df
@@ -117,8 +99,6 @@ class OperationExecutor:
         if not _is_derived_revenue_column(column):
             return df, column
 
-        # Prefer the exact requested column if it contains
-        # usable values.
         if column in df.columns:
 
             values = pd.to_numeric(
@@ -129,13 +109,101 @@ class OperationExecutor:
             if values.notna().sum() > 0:
                 return df, column
 
-        # Otherwise create/use Revenue.
         working_df = self._ensure_revenue_column(
             df=df,
             output_column="Revenue",
         )
 
         return working_df, "Revenue"
+
+    # ========================================================
+    # TREND RESULT HELPERS
+    # ========================================================
+
+    def _get_latest_trend_result(
+        self,
+    ) -> Dict[str, Any] | None:
+        """
+        Return the latest successful trend_analysis result.
+        """
+
+        for item in reversed(self.results):
+
+            if (
+                item.get("operation")
+                == "trend_analysis"
+                and item.get("status")
+                == "success"
+            ):
+
+                result = item.get("result")
+
+                if isinstance(result, dict):
+                    return result
+
+        return None
+
+    def _trend_result_to_chart_dataframe(
+        self,
+        trend_result: Dict[str, Any],
+    ) -> pd.DataFrame:
+        """
+        Convert a verified trend_analysis result into
+        a chart-ready DataFrame.
+
+        The trend result is the source of truth.
+        No trend recalculation happens here.
+        """
+
+        return create_trend_chart_data(
+            trend_result
+        )
+
+    def _execute_trend_line_chart(
+        self,
+        parameters: Dict[str, Any],
+    ) -> tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Generate a line chart from the latest successful
+        trend_analysis result.
+        """
+
+        trend_result = self._get_latest_trend_result()
+
+        if trend_result is None:
+            raise ValueError(
+                "generate_line_chart requires a successful "
+                "trend_analysis result before chart creation."
+            )
+
+        chart_df = self._trend_result_to_chart_dataframe(
+            trend_result
+        )
+
+        chart_parameters = {
+            "x_column": "Period",
+            "y_column": "Value",
+            "title": parameters.get(
+                "title",
+                "Trend",
+            ),
+            "aggregation": "sum",
+            "sort_x": True,
+            "output_path": parameters.get(
+                "output_path"
+            ),
+        }
+
+        tool = get_operation(
+            "generate_line_chart"
+        )
+
+        result = tool(
+            df=chart_df,
+            **chart_parameters,
+        )
+
+        return chart_df, result
 
     # ========================================================
     # CHART EXECUTION
@@ -150,10 +218,6 @@ class OperationExecutor:
 
         working_df = df.copy()
         params = dict(parameters)
-
-        # ----------------------------------------------------
-        # COLUMN ALIASES
-        # ----------------------------------------------------
 
         x_column = (
             params.get("x_column")
@@ -177,10 +241,6 @@ class OperationExecutor:
                 f"{operation} requires a y/value column."
             )
 
-        # ----------------------------------------------------
-        # DERIVED REVENUE
-        # ----------------------------------------------------
-
         if _is_derived_revenue_column(y_column):
 
             working_df, resolved_y = (
@@ -191,10 +251,6 @@ class OperationExecutor:
             )
 
             y_column = resolved_y
-
-        # ----------------------------------------------------
-        # BAR CHART
-        # ----------------------------------------------------
 
         if operation == "generate_bar_chart":
 
@@ -215,10 +271,6 @@ class OperationExecutor:
                     "output_path"
                 ),
             }
-
-        # ----------------------------------------------------
-        # LINE CHART
-        # ----------------------------------------------------
 
         elif operation == "generate_line_chart":
 
@@ -267,171 +319,20 @@ class OperationExecutor:
         output_column = (
             result.get("output_column")
             or parameters.get("output_column")
-            or "Shifted Value"
         )
 
-        shifted_values = result.get(
-            "shifted_values"
-        )
-
-        if shifted_values is None:
-            raise ValueError(
-                "Shift operation did not return shifted values."
-            )
-
-        if not isinstance(
-            shifted_values,
-            pd.Series,
-        ):
-            shifted_values = pd.Series(
-                shifted_values,
-                index=working_df.index,
-            )
-
-        working_df = working_df.copy()
-
-        working_df[output_column] = (
-            shifted_values.reindex(
-                working_df.index
-            )
-        )
-
-        safe_result = dict(result)
-
-        safe_result.pop(
-            "shifted_values",
-            None,
-        )
-
-        safe_result["output_column"] = (
+        if (
             output_column
-        )
-
-        return working_df, safe_result
-
-    # ========================================================
-    # PERSIST PERCENTAGE CHANGE
-    # ========================================================
-
-    def _persist_percentage_change(
-        self,
-        working_df: pd.DataFrame,
-        result: Dict[str, Any],
-        parameters: Dict[str, Any],
-    ) -> tuple[pd.DataFrame, Dict[str, Any]]:
-
-        output_column = (
-            result.get("output_column")
-            or parameters.get("output_column")
-            or "Percentage Change"
-        )
-
-        percentage_change = result.get(
-            "percentage_change"
-        )
-
-        if percentage_change is None:
-            percentage_change = result.get(
-                "values"
-            )
-
-        if percentage_change is None:
-            raise ValueError(
-                "Percentage change operation did not return values."
-            )
-
-        if not isinstance(
-            percentage_change,
-            pd.Series,
+            and output_column in result
         ):
-            percentage_change = pd.Series(
-                percentage_change,
-                index=working_df.index,
-            )
-
-        working_df = working_df.copy()
-
-        working_df[output_column] = (
-            percentage_change.reindex(
-                working_df.index
-            )
-        )
-
-        safe_result = dict(result)
-
-        safe_result.pop(
-            "percentage_change",
-            None,
-        )
-
-        safe_result.pop(
-            "values",
-            None,
-        )
-
-        safe_result["output_column"] = (
-            output_column
-        )
-
-        return working_df, safe_result
-
-    # ========================================================
-    # REVENUE EXECUTION
-    # ========================================================
-
-    def _execute_revenue(
-        self,
-        working_df: pd.DataFrame,
-        parameters: Dict[str, Any],
-    ) -> tuple[pd.DataFrame, Dict[str, Any]]:
-
-        units_column = parameters.get(
-            "units_column",
-            parameters.get(
-                "quantity_column",
-                "Units Sold",
-            ),
-        )
-
-        price_column = parameters.get(
-            "price_column",
-            "Unit Price",
-        )
-
-        output_column = parameters.get(
-            "output_column",
-            "Revenue",
-        )
-
-        working_df = self._ensure_revenue_column(
-            df=working_df,
-            units_column=units_column,
-            price_column=price_column,
-            output_column=output_column,
-        )
-
-        revenue_values = pd.to_numeric(
-            working_df[output_column],
-            errors="coerce",
-        )
-
-        valid_values = revenue_values.dropna()
-
-        result = {
-            "operation": "calculate_revenue",
-            "output_column": output_column,
-            "rows_calculated": int(
-                revenue_values.notna().sum()
-            ),
-            "total_revenue": float(
-                valid_values.sum()
-            ),
-        }
+            working_df[
+                output_column
+            ] = result[output_column]
 
         return working_df, result
 
     # ========================================================
-    # MAIN EXECUTOR
+    # EXECUTE
     # ========================================================
 
     def execute(
@@ -444,11 +345,32 @@ class OperationExecutor:
 
         self.results = []
 
-        for step in execution_steps:
+        total_steps = len(execution_steps)
 
-            step_number = step.get(
-                "step"
-            )
+        successful_steps = 0
+        failed_steps = 0
+
+        for index, step in enumerate(
+            execution_steps,
+            start=1,
+        ):
+
+            if not isinstance(step, dict):
+
+                self.results.append(
+                    {
+                        "step": index,
+                        "operation": None,
+                        "status": "error",
+                        "error": (
+                            "Execution step must "
+                            "be a dictionary."
+                        ),
+                    }
+                )
+
+                failed_steps += 1
+                continue
 
             operation = step.get(
                 "operation"
@@ -463,12 +385,16 @@ class OperationExecutor:
 
                 self.results.append(
                     {
-                        "step": step_number,
+                        "step": index,
+                        "operation": None,
                         "status": "error",
-                        "error": "Missing operation.",
+                        "error": (
+                            "Missing operation."
+                        ),
                     }
                 )
 
+                failed_steps += 1
                 continue
 
             if not isinstance(
@@ -478,7 +404,7 @@ class OperationExecutor:
 
                 self.results.append(
                     {
-                        "step": step_number,
+                        "step": index,
                         "operation": operation,
                         "status": "error",
                         "error": (
@@ -488,20 +414,23 @@ class OperationExecutor:
                     }
                 )
 
+                failed_steps += 1
                 continue
 
-            normalized_operation = str(
-                operation
-            ).strip().lower().replace(
-                "-",
-                "_",
-            ).replace(
-                " ",
-                "_",
+            normalized_operation = (
+                str(operation)
+                .strip()
+                .lower()
+                .replace("-", "_")
+                .replace(" ", "_")
             )
 
             operation_aliases = {
+
                 "revenue_calculation":
+                    "revenue_calculations",
+
+                "revenue_calculate":
                     "revenue_calculations",
 
                 "group_by":
@@ -510,32 +439,26 @@ class OperationExecutor:
                 "groupby":
                     "groupby_aggregation",
 
-                "groupby_aggregate":
-                    "groupby_aggregation",
+                "statistics":
+                    "calculate_statistics",
 
-                "calculate_statistics":
-                    "statistics",
+                "statistical_analysis":
+                    "calculate_statistics",
 
-                "bar_chart":
-                    "generate_bar_chart",
-
-                "chart_generator":
-                    "generate_bar_chart",
-
-                "line_chart":
-                    "generate_line_chart",
-
-                "shift":
-                    "create_shifted_column",
-
-                "ranking":
-                    "rank_by_value",
+                "percentage_change":
+                    "calculate_percentage_change",
 
                 "percentage":
                     "calculate_percentage_change",
 
                 "comparison":
                     "compare_columns",
+
+                "line_chart":
+                    "generate_line_chart",
+
+                "bar_chart":
+                    "generate_bar_chart",
             }
 
             normalized_operation = (
@@ -546,26 +469,30 @@ class OperationExecutor:
             )
 
             allowed_operations = {
-                "generate_bar_chart",
-                "generate_line_chart",
-                "calculate_revenue",
-                "revenue_calculation",
+
                 "revenue_calculations",
+                "calculate_revenue",
+                "groupby_aggregation",
+                "groupby_aggregate",
+                "find_max",
+                "calculate_statistics",
+                "categorical_analysis",
+                "rank_by_value",
                 "create_shifted_column",
                 "calculate_percentage_change",
-                "groupby_aggregation",
-                "statistics",
-                "categorical_analysis",
-                "find_max",
-                "rank_by_value",
                 "compare_columns",
+                "trend_analysis",
+                "generate_bar_chart",
+                "generate_line_chart",
             }
 
             if normalized_operation not in allowed_operations:
+
                 self.results.append(
                     {
-                        "step": step_number,
-                        "operation": normalized_operation,
+                        "step": index,
+                        "operation":
+                            normalized_operation,
                         "status": "error",
                         "error": (
                             "Operation is not allowed: "
@@ -573,18 +500,49 @@ class OperationExecutor:
                         ),
                     }
                 )
+
+                failed_steps += 1
                 continue
 
             try:
 
-                # ==========================================
+                # ==================================================
                 # CHARTS
-                # ==========================================
+                # ==================================================
 
-                if normalized_operation in {
-                    "generate_bar_chart",
-                    "generate_line_chart",
-                }:
+                if normalized_operation == "generate_line_chart":
+
+                    latest_trend = (
+                        self._get_latest_trend_result()
+                    )
+
+                    if latest_trend is not None:
+
+                        chart_df, result = (
+                            self._execute_trend_line_chart(
+                                parameters,
+                            )
+                        )
+
+                        # IMPORTANT:
+                        # Chart data must NEVER replace the
+                        # original working dataframe.
+                        # Keep business data available for
+                        # all subsequent operations.
+                        _ = chart_df
+
+                    else:
+
+                        (
+                            _chart_df,
+                            result,
+                        ) = self._execute_chart(
+                            normalized_operation,
+                            working_df,
+                            parameters,
+                        )
+
+                elif normalized_operation == "generate_bar_chart":
 
                     (
                         working_df,
@@ -595,27 +553,115 @@ class OperationExecutor:
                         parameters,
                     )
 
-                # ==========================================
+                # ==================================================
                 # REVENUE
-                # ==========================================
+                # ==================================================
 
                 elif normalized_operation in {
-                    "calculate_revenue",
-                    "revenue_calculation",
                     "revenue_calculations",
                 }:
 
-                    (
-                        working_df,
-                        result,
-                    ) = self._execute_revenue(
-                        working_df,
-                        parameters,
+                    working_df = (
+                        self._ensure_revenue_column(
+                            df=working_df,
+                        )
                     )
 
-                # ==========================================
-                # SHIFT
-                # ==========================================
+                    result = {
+                        "operation":
+                            "revenue_calculations",
+                        "status":
+                            "success",
+                        "column":
+                            "Revenue",
+                        "non_null_values":
+                            int(
+                                working_df[
+                                    "Revenue"
+                                ].notna().sum()
+                            ),
+                        "total_revenue":
+                            float(
+                                working_df[
+                                    "Revenue"
+                                ].sum()
+                            ),
+                    }
+
+                # ==================================================
+                # TREND ANALYSIS
+                # ==================================================
+
+                elif normalized_operation == "trend_analysis":
+
+                    trend_parameters = dict(
+                        parameters
+                    )
+
+                    value_column = (
+                        trend_parameters.get(
+                            "value_column"
+                        )
+                    )
+
+                    date_column = (
+                        trend_parameters.get(
+                            "date_column"
+                        )
+                    )
+
+                    if _is_derived_revenue_column(
+                        value_column
+                    ):
+
+                        (
+                            working_df,
+                            resolved_value,
+                        ) = (
+                            self._resolve_revenue_column(
+                                working_df,
+                                value_column,
+                            )
+                        )
+
+                        trend_parameters[
+                            "value_column"
+                        ] = resolved_value
+
+                    if (
+                        date_column
+                        not in working_df.columns
+                    ):
+                        raise ValueError(
+                            f"Date column "
+                            f"'{date_column}' "
+                            "does not exist."
+                        )
+
+                    if (
+                        trend_parameters.get(
+                            "value_column"
+                        )
+                        not in working_df.columns
+                    ):
+                        raise ValueError(
+                            "Value column "
+                            f"'{trend_parameters.get('value_column')}' "
+                            "does not exist."
+                        )
+
+                    tool = get_operation(
+                        "trend_analysis"
+                    )
+
+                    result = tool(
+                        df=working_df,
+                        **trend_parameters,
+                    )
+
+                # ==================================================
+                # SHIFTED COLUMN
+                # ==================================================
 
                 elif normalized_operation == (
                     "create_shifted_column"
@@ -639,50 +685,49 @@ class OperationExecutor:
                         parameters,
                     )
 
-                # ==========================================
-                # PERCENTAGE CHANGE
-                # ==========================================
-
-                elif normalized_operation == (
-                    "calculate_percentage_change"
-                ):
-
-                    tool = get_operation(
-                        normalized_operation
-                    )
-
-                    result = tool(
-                        df=working_df,
-                        **parameters,
-                    )
-
-                    (
-                        working_df,
-                        result,
-                    ) = self._persist_percentage_change(
-                        working_df,
-                        result,
-                        parameters,
-                    )
-
-                # ==========================================
+                # ==================================================
                 # STANDARD OPERATIONS
-                # ==========================================
+                # ==================================================
 
                 else:
 
+                    operation_parameters = dict(parameters)
+
+                    value_column = operation_parameters.get(
+                        "value_column"
+                    )
+
+                    if _is_derived_revenue_column(
+                        value_column
+                    ):
+                        (
+                            working_df,
+                            resolved_value_column,
+                        ) = self._resolve_revenue_column(
+                            working_df,
+                            value_column,
+                        )
+
+                        operation_parameters[
+                            "value_column"
+                        ] = resolved_value_column
+
                     tool = get_operation(
                         normalized_operation
                     )
 
                     result = tool(
                         df=working_df,
-                        **parameters,
+                        **operation_parameters,
                     )
+
+                # ==================================================
+                # STORE SUCCESS
+                # ==================================================
 
                 self.results.append(
                     {
-                        "step": step_number,
+                        "step": index,
                         "operation":
                             normalized_operation,
                         "status": "success",
@@ -690,11 +735,13 @@ class OperationExecutor:
                     }
                 )
 
+                successful_steps += 1
+
             except Exception as exc:
 
                 self.results.append(
                     {
-                        "step": step_number,
+                        "step": index,
                         "operation":
                             normalized_operation,
                         "status": "error",
@@ -702,32 +749,19 @@ class OperationExecutor:
                     }
                 )
 
-        successful_steps = sum(
-            1
-            for item in self.results
-            if item.get("status")
-            == "success"
-        )
-
-        failed_steps = sum(
-            1
-            for item in self.results
-            if item.get("status")
-            == "error"
-        )
-
-        total_steps = len(
-            execution_steps
-        )
+                failed_steps += 1
 
         if failed_steps == 0:
+
             status = "success"
 
-        elif successful_steps == 0:
-            status = "error"
+        elif successful_steps > 0:
+
+            status = "partial_success"
 
         else:
-            status = "partial"
+
+            status = "error"
 
         return {
             "status": status,

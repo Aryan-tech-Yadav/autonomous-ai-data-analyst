@@ -122,6 +122,13 @@ class InsightDetector:
                     )
                 )
 
+            elif operation == "trend_analysis":
+                insights.extend(
+                    self._from_trend_analysis(
+                        result
+                    )
+                )
+
         insights = self._deduplicate(
             insights
         )
@@ -700,6 +707,163 @@ class InsightDetector:
         return insights
 
     # ==========================================================
+    # TREND ANALYSIS
+    # ==========================================================
+
+    def _from_trend_analysis(
+        self,
+        result: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert trend_analysis results into deterministic
+        business insights.
+
+        The trend operation provides monthly periods and values.
+        This method only interprets those verified results.
+        """
+
+        rows = result.get(
+            "results",
+            [],
+        )
+
+        if not isinstance(rows, list):
+            return []
+
+        valid = []
+
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+
+            period = item.get("period")
+            value = item.get("value")
+
+            if period is None or value is None:
+                continue
+
+            try:
+                numeric_value = float(value)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            valid.append(
+                {
+                    "period": str(period),
+                    "value": numeric_value,
+                }
+            )
+
+        if not valid:
+            return []
+
+        insights: List[Dict[str, Any]] = []
+
+        highest = max(
+            valid,
+            key=lambda item: item["value"],
+        )
+
+        lowest = min(
+            valid,
+            key=lambda item: item["value"],
+        )
+
+        insights.append(
+            {
+                "type": "trend_highest_period",
+                "operation": "trend_analysis",
+                "message": (
+                    f"{highest['period']} has the highest "
+                    f"value at {highest['value']:,.2f}."
+                ),
+                "period": highest["period"],
+                "value": highest["value"],
+            }
+        )
+
+        if len(valid) > 1:
+            insights.append(
+                {
+                    "type": "trend_lowest_period",
+                    "operation": "trend_analysis",
+                    "message": (
+                        f"{lowest['period']} has the lowest "
+                        f"value at {lowest['value']:,.2f}."
+                    ),
+                    "period": lowest["period"],
+                    "value": lowest["value"],
+                }
+            )
+
+        overall_change = result.get(
+            "overall_percentage_change"
+        )
+
+        if overall_change is not None:
+            try:
+                change_value = float(
+                    overall_change
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                change_value = None
+
+            if change_value is not None:
+                if change_value > 0:
+                    direction = "increased"
+                elif change_value < 0:
+                    direction = "decreased"
+                else:
+                    direction = "remained unchanged"
+
+                insights.append(
+                    {
+                        "type": "trend_overall_change",
+                        "operation": "trend_analysis",
+                        "message": (
+                            f"Overall value {direction} by "
+                            f"{abs(change_value):.2f}% "
+                            f"from the first to the last period."
+                        ),
+                        "value": change_value,
+                    }
+                )
+
+        if len(valid) > 1:
+            first = valid[0]
+            last = valid[-1]
+
+            if (
+                first["value"] > 0
+                and last["value"] != first["value"]
+            ):
+                insights.append(
+                    {
+                        "type": "trend_direction",
+                        "operation": "trend_analysis",
+                        "message": (
+                            f"The trend moved from "
+                            f"{first['period']} "
+                            f"({first['value']:,.2f}) to "
+                            f"{last['period']} "
+                            f"({last['value']:,.2f})."
+                        ),
+                        "start_period": first["period"],
+                        "start_value": first["value"],
+                        "end_period": last["period"],
+                        "end_value": last["value"],
+                    }
+                )
+
+        return insights
+
+    # ==========================================================
     # DEDUPLICATION
     # ==========================================================
 
@@ -762,6 +926,42 @@ class InsightDetector:
             for insight in unique
         )
 
+        # ------------------------------------------------------
+        # Prefer explicit find_max results over equivalent
+        # groupby highest insights.
+        #
+        # Example:
+        #   find_max  -> East = 82,203.57
+        #   groupby    -> East has highest = 82,203.57
+        #
+        # Both communicate the same fact, so keep only the
+        # explicit maximum result.
+        # ------------------------------------------------------
+
+        find_max_highest = {
+            (
+                insight.get("group"),
+                round(float(insight.get("value")), 10)
+            )
+            for insight in unique
+            if insight.get("type") == "maximum"
+            and insight.get("operation") == "find_max"
+            and insight.get("group") is not None
+            and insight.get("value") is not None
+        }
+
+        find_max_lowest = {
+            (
+                insight.get("group"),
+                round(float(insight.get("value")), 10)
+            )
+            for insight in unique
+            if insight.get("type") == "minimum"
+            and insight.get("operation") == "find_max"
+            and insight.get("group") is not None
+            and insight.get("value") is not None
+        }
+
         consolidated = []
 
         for insight in unique:
@@ -781,6 +981,28 @@ class InsightDetector:
                 and has_ranking_lowest
             ):
                 continue
+
+            # Remove groupby insights when an identical explicit
+            # find_max result already establishes the same fact.
+            if insight_type == "group_highest":
+                key = (
+                    insight.get("group"),
+                    round(float(insight.get("value")), 10)
+                    if insight.get("value") is not None
+                    else None,
+                )
+                if key in find_max_highest:
+                    continue
+
+            if insight_type == "group_lowest":
+                key = (
+                    insight.get("group"),
+                    round(float(insight.get("value")), 10)
+                    if insight.get("value") is not None
+                    else None,
+                )
+                if key in find_max_lowest:
+                    continue
 
             consolidated.append(
                 insight

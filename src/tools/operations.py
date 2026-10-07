@@ -124,74 +124,34 @@ def groupby_aggregate(
             f"Value column '{value_column}' does not exist."
         )
 
-    allowed_aggregations = {
-        "sum",
-        "mean",
-        "min",
-        "max",
-        "count",
-        "median",
-    }
+    working_df = df.copy()
 
-    aggregation = aggregation.lower().strip()
-
-    if aggregation not in allowed_aggregations:
-        raise ValueError(
-            f"Unsupported aggregation '{aggregation}'."
-        )
-
-    working_df = df[[group_column, value_column]].copy()
+    if group_column == "Date":
+        working_df[group_column] = pd.to_datetime(
+            working_df[group_column],
+            errors="coerce",
+        ).dt.strftime("%Y-%m-%d")
 
     working_df[value_column] = pd.to_numeric(
         working_df[value_column],
         errors="coerce",
     )
 
-    working_df = working_df.dropna(
-        subset=[group_column]
-    )
-
     grouped = (
         working_df
+        .dropna(subset=[group_column, value_column])
         .groupby(group_column, dropna=False)[value_column]
         .agg(aggregation)
         .reset_index()
     )
-
-    results = []
-
-    for _, row in grouped.iterrows():
-
-        group_value = row[group_column]
-        numeric_value = row[value_column]
-
-        results.append(
-            {
-                str(group_column): (
-                    None
-                    if pd.isna(group_value)
-                    else str(group_value)
-                ),
-                str(value_column): (
-                    None
-                    if pd.isna(numeric_value)
-                    else float(numeric_value)
-                ),
-            }
-        )
 
     return {
         "operation": "groupby_aggregate",
         "group_column": group_column,
         "value_column": value_column,
         "aggregation": aggregation,
-        "results": results,
+        "results": grouped.to_dict(orient="records"),
     }
-
-
-# ==========================================================
-# Find Maximum Group
-# ==========================================================
 
 def find_max(
     df: pd.DataFrame,
@@ -570,6 +530,359 @@ def compare_columns(
 
 
 # ==========================================================
+# Trend Analysis
+# ==========================================================
+
+def trend_analysis(
+    df: pd.DataFrame,
+    date_column: str,
+    value_column: str,
+    aggregation: str = "sum",
+    period: str = "monthly",
+) -> Dict[str, Any]:
+
+    if date_column not in df.columns:
+        raise ValueError(
+            f"Date column '{date_column}' does not exist."
+        )
+
+    if value_column not in df.columns:
+        raise ValueError(
+            f"Value column '{value_column}' does not exist."
+        )
+
+    allowed_aggregations = {
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "count",
+    }
+
+    if aggregation not in allowed_aggregations:
+        raise ValueError(
+            "Unsupported aggregation. "
+            f"Use one of: {', '.join(sorted(allowed_aggregations))}"
+        )
+
+    working_df = df[[date_column, value_column]].copy()
+
+    working_df[date_column] = pd.to_datetime(
+        working_df[date_column],
+        errors="coerce",
+    )
+
+    working_df[value_column] = pd.to_numeric(
+        working_df[value_column],
+        errors="coerce",
+    )
+
+    working_df = working_df.dropna(
+        subset=[date_column, value_column]
+    )
+
+    if working_df.empty:
+        raise ValueError(
+            "No valid date/value rows available for trend analysis."
+        )
+
+    # Monthly trend
+    working_df["Period"] = (
+        working_df[date_column]
+        .dt.to_period("M")
+        .astype(str)
+    )
+
+    grouped = (
+        working_df
+        .groupby("Period")[value_column]
+        .agg(aggregation)
+        .reset_index()
+    )
+
+    grouped = grouped.sort_values(
+        "Period"
+    )
+
+    results = []
+
+    for _, row in grouped.iterrows():
+
+        value = row[value_column]
+
+        results.append(
+            {
+                "period": str(row["Period"]),
+                "value": (
+                    None
+                    if pd.isna(value)
+                    else float(value)
+                ),
+            }
+        )
+
+    values = [
+        item["value"]
+        for item in results
+        if item["value"] is not None
+    ]
+
+    if len(values) >= 2:
+
+        first_value = values[0]
+        last_value = values[-1]
+
+        if first_value != 0:
+            overall_change = (
+                (last_value - first_value)
+                / abs(first_value)
+            ) * 100
+        else:
+            overall_change = None
+
+    else:
+        overall_change = None
+
+    return {
+        "operation": "trend_analysis",
+        "date_column": date_column,
+        "value_column": value_column,
+        "aggregation": aggregation,
+        "period": "monthly",
+        "results": results,
+        "period_count": len(results),
+        "overall_percentage_change": (
+            None
+            if overall_change is None
+            else float(overall_change)
+        ),
+    }
+
+# ==========================================================
+# Trend Chart Data
+# ==========================================================
+
+def create_trend_chart_data(
+    trend_result: Dict[str, Any],
+) -> pd.DataFrame:
+    """
+    Convert a verified trend_analysis result into a
+    chart-ready dataframe.
+
+    This does not calculate new business metrics.
+    It only reshapes the already verified trend result.
+    """
+
+    if not isinstance(trend_result, dict):
+        raise ValueError(
+            "trend_result must be a dictionary."
+        )
+
+    rows = trend_result.get(
+        "results",
+        [],
+    )
+
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(
+            "Trend result contains no chartable data."
+        )
+
+    chart_rows = []
+
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+
+        period = item.get("period")
+        value = item.get("value")
+
+        if period is None or value is None:
+            continue
+
+        try:
+            numeric_value = float(value)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            continue
+
+        chart_rows.append(
+            {
+                "Period": str(period),
+                "Value": numeric_value,
+            }
+        )
+
+    if not chart_rows:
+        raise ValueError(
+            "Trend result contains no valid chartable rows."
+        )
+
+    chart_df = pd.DataFrame(
+        chart_rows,
+        columns=["Period", "Value"],
+    )
+
+    return chart_df
+
+
+
+
+# ==========================================================
+# Grouped Trend Analysis
+# ==========================================================
+
+def grouped_trend_analysis(
+    df: pd.DataFrame,
+    date_column: str,
+    group_column: str,
+    value_column: str,
+    aggregation: str = "sum",
+) -> Dict[str, Any]:
+    """
+    Analyze a value over monthly periods for multiple groups.
+
+    Example:
+        Date × Product Category × Revenue
+
+    Returns one monthly time series for each group.
+    """
+
+    required_columns = [
+        date_column,
+        group_column,
+        value_column,
+    ]
+
+    for column in required_columns:
+        if column not in df.columns:
+            raise ValueError(
+                f"Column '{column}' does not exist."
+            )
+
+    allowed_aggregations = {
+        "sum",
+        "mean",
+        "min",
+        "max",
+        "count",
+        "median",
+    }
+
+    aggregation = str(
+        aggregation
+    ).strip().lower()
+
+    if aggregation not in allowed_aggregations:
+        raise ValueError(
+            f"Unsupported aggregation '{aggregation}'."
+        )
+
+    working_df = df[
+        [
+            date_column,
+            group_column,
+            value_column,
+        ]
+    ].copy()
+
+    working_df[date_column] = pd.to_datetime(
+        working_df[date_column],
+        errors="coerce",
+    )
+
+    working_df[value_column] = pd.to_numeric(
+        working_df[value_column],
+        errors="coerce",
+    )
+
+    working_df = working_df.dropna(
+        subset=[
+            date_column,
+            group_column,
+            value_column,
+        ]
+    )
+
+    if working_df.empty:
+        raise ValueError(
+            "No valid rows available for grouped trend analysis."
+        )
+
+    working_df["_period"] = (
+        working_df[date_column]
+        .dt.to_period("M")
+    )
+
+    grouped = (
+        working_df
+        .groupby(
+            [
+                group_column,
+                "_period",
+            ],
+            dropna=False,
+        )[value_column]
+        .agg(aggregation)
+        .reset_index()
+        .sort_values(
+            [
+                group_column,
+                "_period",
+            ]
+        )
+    )
+
+    results = []
+
+    for _, row in grouped.iterrows():
+
+        group_value = row[group_column]
+        period_value = row["_period"]
+        numeric_value = row[value_column]
+
+        results.append(
+            {
+                "group": (
+                    None
+                    if pd.isna(group_value)
+                    else str(group_value)
+                ),
+                "period": str(period_value),
+                "value": (
+                    None
+                    if pd.isna(numeric_value)
+                    else float(numeric_value)
+                ),
+            }
+        )
+
+    group_count = int(
+        grouped[group_column]
+        .nunique()
+    )
+
+    period_count = int(
+        grouped["_period"]
+        .nunique()
+    )
+
+    return {
+        "operation": "grouped_trend_analysis",
+        "date_column": date_column,
+        "group_column": group_column,
+        "value_column": value_column,
+        "aggregation": aggregation,
+        "period": "monthly",
+        "group_count": group_count,
+        "period_count": period_count,
+        "results": results,
+    }
+
+
+# ==========================================================
 # Chart Helpers
 # ==========================================================
 
@@ -866,7 +1179,6 @@ def generate_line_chart(
 # ==========================================================
 # Operation Registry
 # ==========================================================
-
 OPERATION_REGISTRY = {
     "revenue_calculation": calculate_revenue,
     "revenue_calculations": calculate_revenue,
@@ -896,13 +1208,17 @@ OPERATION_REGISTRY = {
     "compare_columns": compare_columns,
     "comparison": compare_columns,
 
+    "trend_analysis": trend_analysis,
+
+    "create_trend_chart_data":
+        create_trend_chart_data,
+
     "generate_bar_chart":
         generate_bar_chart,
 
     "generate_line_chart":
         generate_line_chart,
 }
-
 
 # ==========================================================
 # Operation Lookup

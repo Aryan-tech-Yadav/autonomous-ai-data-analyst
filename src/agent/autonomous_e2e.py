@@ -63,6 +63,7 @@ class AutonomousE2ERunner:
                 user_query=user_query,
                 execution_result=current_execution,
                 context=context,
+                execution_history=history,
             )
 
             status = inspection.get("status")

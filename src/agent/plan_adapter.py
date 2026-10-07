@@ -81,10 +81,22 @@ def _schema_columns(context: dict[str, Any] | None) -> list[str]:
 
 
 def _find_column(
-    requested: Any,
+    requested: str | None,
     available_columns: list[str],
     derived_columns: set[str] | None = None,
 ) -> str:
+    """
+    Resolve an LLM-provided column name to the safest internal column.
+
+    Revenue is special:
+    - "Revenue"
+    - "Total Revenue"
+    - "total_revenue"
+    - "calculated revenue"
+    all resolve to the canonical derived column "Revenue" whenever
+    the derived Revenue column is available.
+    """
+
     if requested is None:
         raise ValueError("Column name is required.")
 
@@ -101,46 +113,60 @@ def _find_column(
         for alias in DERIVED_REVENUE_ALIASES
     }
 
-    # Canonical Revenue has priority over every revenue alias.
+    # ---------------------------------------------------------
+    # 1. Canonical Revenue ALWAYS wins over source aliases.
+    # ---------------------------------------------------------
     if normalized_requested in revenue_aliases:
         if CANONICAL_REVENUE_COLUMN in derived_columns:
             return CANONICAL_REVENUE_COLUMN
 
+        # A canonical Revenue column may already exist in the
+        # current working schema/context.
         if CANONICAL_REVENUE_COLUMN in available_columns:
             return CANONICAL_REVENUE_COLUMN
 
-    # Exact derived-column match.
-    for column in derived_columns:
-        if column == requested_text:
-            return column
-
-    # Exact source-column match.
-    for column in available_columns:
-        if column == requested_text:
-            return column
-
-    # Normalized derived-column match.
-    for column in derived_columns:
-        if _normalize(column) == normalized_requested:
-            return column
-
-    # Normalized source-column match.
-    for column in available_columns:
-        if _normalize(column) == normalized_requested:
-            return column
-
-    # If no canonical Revenue exists yet, allow an existing
-    # source revenue alias such as Total Revenue.
-    if normalized_requested in revenue_aliases:
+        # Even if the raw dataset contains "Total Revenue",
+        # do NOT silently return it when Revenue is expected.
+        # The adapter will only fall back to the source alias
+        # when no canonical Revenue can be established.
         for column in available_columns:
-            if _normalize(column) in revenue_aliases:
+            if _normalize(column) == normalized_requested:
                 return column
+
+    # ---------------------------------------------------------
+    # 2. Exact derived-column match.
+    # ---------------------------------------------------------
+    for column in derived_columns:
+        if column == requested_text:
+            return column
+
+    # ---------------------------------------------------------
+    # 3. Normalized derived-column match.
+    # ---------------------------------------------------------
+    for column in derived_columns:
+        if _normalize(column) == normalized_requested:
+            return column
+
+    # ---------------------------------------------------------
+    # 4. Exact source-column match.
+    # ---------------------------------------------------------
+    for column in available_columns:
+        if column == requested_text:
+            return column
+
+    # ---------------------------------------------------------
+    # 5. Normalized source-column match.
+    # ---------------------------------------------------------
+    for column in available_columns:
+        if _normalize(column) == normalized_requested:
+            return column
 
     raise ValueError(
         f"Unable to resolve column '{requested_text}'. "
         f"Available columns: "
         f"{list(available_columns) + list(derived_columns)}"
     )
+
 
 def _tool_for_operation(operation: str) -> str:
     canonical = _canonical_operation(operation)
@@ -676,13 +702,13 @@ def _adapt_step(
             f"Parameters for operation '{operation}' must be an object."
         )
 
-    if operation == "revenue_calculations":
+    if operation in {"revenue_calculations", "calculate_revenue"}:
         parameters = _adapt_revenue_parameters(
             raw_parameters,
             available_columns,
         )
 
-    elif operation == "groupby_aggregation":
+    elif operation in {"groupby_aggregation", "groupby_aggregate"}:
         parameters = _adapt_groupby_parameters(
             raw_parameters,
             available_columns,

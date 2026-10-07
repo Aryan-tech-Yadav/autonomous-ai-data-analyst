@@ -31,6 +31,7 @@ class ResultInterpreter:
         "calculate_percentage_change",
         "compare_columns",
         "create_shifted_column",
+        "trend_analysis",
         "generate_bar_chart",
         "generate_line_chart",
     }
@@ -50,11 +51,35 @@ class ResultInterpreter:
         self,
         user_query: str,
         execution_results: Dict[str, Any],
+        execution_history: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
 
         safe_results = self._sanitize(
             execution_results
         )
+
+        history = execution_history or []
+
+        safe_history = []
+
+        for item in history:
+
+            if not isinstance(item, dict):
+                continue
+
+            safe_history.append(
+                {
+                    "iteration": item.get(
+                        "iteration"
+                    ),
+                    "execution": self._sanitize(
+                        item.get(
+                            "execution",
+                            {}
+                        )
+                    ),
+                }
+            )
 
         system_prompt = """
 You are the Result Interpreter of an autonomous
@@ -91,6 +116,7 @@ Allowed operations:
 - calculate_percentage_change
 - compare_columns
 - create_shifted_column
+- trend_analysis
 - generate_bar_chart
 - generate_line_chart
 
@@ -109,7 +135,16 @@ Rules:
    use "continue" and request the appropriate chart
    operation.
 
-5. For a bar chart based on a previous group-by result,
+5. If the executed result already contains a successful
+   trend_analysis result and the user did NOT explicitly
+   request a chart, visualization, graph, or plot,
+   use "final".
+
+6. Never treat "period" from a trend_analysis result as
+   a dataframe column. The trend_analysis operation creates
+   monthly periods internally.
+
+7. For a bar chart based on a previous group-by result,
    provide:
    - x_column
    - y_column
@@ -124,12 +159,30 @@ Rules:
 USER QUESTION:
 {user_query}
 
-EXECUTED ANALYSIS RESULTS:
+CURRENT EXECUTED ANALYSIS RESULTS:
 {json.dumps(
     safe_results,
     indent=2,
     ensure_ascii=False,
 )}
+
+PREVIOUS INVESTIGATION HISTORY:
+{json.dumps(
+    safe_history,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+IMPORTANT:
+Use the previous investigation history when deciding
+whether the user's question is already answered.
+
+Do NOT repeat an operation that has already been
+successfully performed unless the new result requires
+a different parameterization or deeper analysis.
+
+Treat the current result and previous results as one
+continuous investigation.
 
 Determine whether the user's question has been completely
 answered.
@@ -160,6 +213,7 @@ Return JSON only.
             return self._deterministic_fallback(
                 user_query=user_query,
                 execution_results=execution_results,
+                execution_history=execution_history,
                 reason=(
                     "LLM result interpretation failed: "
                     f"{exc}"
@@ -175,6 +229,7 @@ Return JSON only.
             return self._deterministic_fallback(
                 user_query=user_query,
                 execution_results=execution_results,
+                execution_history=execution_history,
                 reason=(
                     "LLM returned an invalid interpreter "
                     f"response: {exc}"
@@ -472,6 +527,7 @@ Return JSON only.
         user_query: str,
         execution_results: Dict[str, Any],
         reason: str,
+        execution_history: list[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
 
         results = execution_results.get(
@@ -530,6 +586,87 @@ Return JSON only.
                 ),
                 "next_operations": [],
             }
+
+        # ------------------------------------------------------
+        # Successful trend analysis without chart request
+        # ------------------------------------------------------
+
+        trend_completed = False
+
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+
+            operation = str(
+                result.get("operation", "")
+            ).strip().lower()
+
+            if operation == "trend_analysis" and result.get("status") == "success":
+                trend_completed = True
+                break
+
+        if trend_completed:
+            chart_requested = any(
+                keyword in query_lower
+                for keyword in (
+                    "chart",
+                    "graph",
+                    "visual",
+                    "plot",
+                )
+            )
+
+            causal_question = any(
+                keyword in query_lower
+                for keyword in (
+                    "why",
+                    "reason",
+                    "cause",
+                    "caused",
+                    "driver",
+                    "drivers",
+                    "decrease",
+                    "decreased",
+                    "decline",
+                    "declined",
+                    "drop",
+                    "dropped",
+                    "kam kyun",
+                    "kyun",
+                )
+            )
+
+            if not chart_requested and not causal_question:
+                return {
+                    "decision": "final",
+                    "reason": (
+                        "The requested trend analysis has already "
+                        "been completed successfully."
+                    ),
+                    "next_operations": [],
+                }
+
+            if causal_question and not chart_requested:
+                return {
+                    "decision": "continue",
+                    "reason": (
+                        "Trend analysis is available, but the user "
+                        "is asking for a causal explanation. Additional "
+                        "analysis is required to identify the drivers "
+                        "behind the change."
+                    ),
+                    "next_operations": [
+                        {
+                            "operation": "categorical_analysis",
+                            "parameters": {},
+                            "description": (
+                                "Analyze categorical dimensions to "
+                                "identify potential drivers of the "
+                                "revenue change."
+                            ),
+                        }
+                    ],
+                }
 
         # ------------------------------------------------------
         # Detect whether a chart was requested

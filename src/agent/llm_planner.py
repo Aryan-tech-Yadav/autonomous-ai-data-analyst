@@ -54,14 +54,27 @@ Use for:
 - Previous/current value analysis
 - Lag/shift analysis
 
-2. time_analysis
+2. trend_analysis
 
 Use for:
-- Date analysis
-- Time-based patterns
 - Monthly trends
 - Daily trends
 - Revenue trends over time
+- Time-based aggregation
+- Date-based metric progression
+
+IMPORTANT:
+- ALWAYS use trend_analysis for trend questions.
+- NEVER use time_analysis.
+- trend_analysis accepts date_column, value_column, and aggregation.
+- trend_analysis creates the monthly Period internally.
+- DO NOT invent a Month column.
+- For monthly revenue trend, use:
+  {
+    "date_column": "Date",
+    "value_column": "Revenue",
+    "aggregation": "sum"
+  }
 
 3. chart_generator
 
@@ -114,6 +127,7 @@ Advanced analytics operations:
 - create_shifted_column
 - calculate_percentage_change
 - compare_columns
+- trend_analysis
 
 ========================================================
 SHIFT / PREVIOUS VALUE ANALYSIS
@@ -438,14 +452,55 @@ Use generate_bar_chart when:
 - The user asks for Top-N values.
 - The user asks for category-wise comparison.
 
-Use generate_line_chart when:
+AUTOMATIC TREND VISUALIZATION:
 
-- The user asks for a trend.
-- The user asks how something changes over time.
-- The user asks for revenue over dates.
-- The user asks for monthly progression.
-- The user asks for daily progression.
-- The X-axis represents an ordered time dimension.
+When the user asks for:
+
+- a trend
+- monthly trend
+- daily trend
+- revenue trend
+- progression over time
+- change over time
+- movement over time
+- how a metric changes over time
+
+you MUST:
+
+1. Perform trend_analysis.
+2. ALSO generate_line_chart automatically.
+3. Put trend_analysis BEFORE generate_line_chart.
+4. Use the actual dataframe date column as x_column.
+5. Use the actual numeric metric as y_column.
+6. Do NOT require the user to explicitly say chart or graph.
+7. Do NOT generate a line chart for simple category comparisons.
+
+For monthly revenue trend use:
+
+trend_analysis:
+{
+  "date_column": "Date",
+  "value_column": "Revenue",
+  "aggregation": "sum"
+}
+
+generate_line_chart:
+{
+  "x_column": "Date",
+  "y_column": "Revenue",
+  "aggregation": "sum",
+  "title": "Monthly Revenue Trend",
+  "output_path": "reports/monthly_revenue_trend.png"
+}
+
+IMPORTANT FOR TREND CHARTS:
+
+- trend_analysis creates monthly periods internally.
+- Do NOT invent a Month dataframe column.
+- Do NOT use Period as a source dataframe column.
+- Use actual dataframe columns for generate_line_chart.
+- If Revenue is derived from Units Sold × Unit Price,
+  Revenue must be available before the chart is generated.
 
 Do NOT use a line chart for simple category comparisons.
 
@@ -453,6 +508,7 @@ Do NOT use a bar chart for a continuous time trend
 unless the user explicitly requests bars.
 
 ========================================================
+
 RANKING + CHART RULE
 ========================================================
 
@@ -631,10 +687,18 @@ For representative analysis, look for:
 
 - Sales Rep
 
-For time analysis, look for:
+For trend analysis, look for:
 
 - Date
 - Time
+
+For monthly revenue trends:
+- Use trend_analysis.
+- Use Date as date_column.
+- Use Revenue as value_column.
+- Use sum as aggregation.
+- Do not create or reference a Month column unless it already exists
+  in the dataset and the user explicitly asks to use it.
 
 For percentage change:
 

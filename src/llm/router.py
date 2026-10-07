@@ -1,3 +1,5 @@
+import time
+
 from src.llm.anthropic_client import AnthropicClient
 from src.llm.nvidia_client import NVIDIAClient
 
@@ -10,9 +12,16 @@ class LLMRouter:
     without knowing which LLM provider is being used.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+    ):
         self._nvidia = None
         self._anthropic = None
+
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def _get_nvidia(self) -> NVIDIAClient:
         """
@@ -34,6 +43,21 @@ class LLMRouter:
 
         return self._anthropic
 
+    def _get_client(self, provider: str):
+        """
+        Resolve the requested provider client.
+        """
+
+        if provider == "nvidia":
+            return self._get_nvidia()
+
+        if provider in {"anthropic", "claude"}:
+            return self._get_anthropic()
+
+        raise ValueError(
+            f"Unsupported LLM provider: {provider}"
+        )
+
     def generate(
         self,
         messages: list[dict],
@@ -43,26 +67,48 @@ class LLMRouter:
     ) -> str:
         """
         Generate a response using the selected provider.
+
+        Temporary provider failures are retried automatically.
         """
 
         provider = provider.lower().strip()
+        client = self._get_client(provider)
 
-        if provider == "nvidia":
-            client = self._get_nvidia()
+        last_error = None
 
-        elif provider in {"anthropic", "claude"}:
-            client = self._get_anthropic()
+        for attempt in range(
+            self.max_retries + 1
+        ):
+            try:
+                return client.generate(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
 
-        else:
-            raise ValueError(
-                f"Unsupported LLM provider: {provider}"
-            )
+            except Exception as exc:
+                last_error = exc
 
-        return client.generate(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+                if attempt >= self.max_retries:
+                    raise
+
+                delay = (
+                    self.retry_delay
+                    * (2 ** attempt)
+                )
+
+                print(
+                    f"LLM request failed for "
+                    f"{provider} "
+                    f"(attempt {attempt + 1}/"
+                    f"{self.max_retries + 1}). "
+                    f"Retrying in {delay:.1f}s...",
+                    flush=True,
+                )
+
+                time.sleep(delay)
+
+        raise last_error
 
     def available_providers(self) -> list[str]:
         """

@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List
 
 
@@ -10,34 +11,38 @@ ALLOWED_TOOLS = {
 }
 
 
+OPERATION_ALIASES = {
+    "revenue_calculations": "calculate_revenue",
+    "revenue_calculation": "calculate_revenue",
+    "calculate_revenues": "calculate_revenue",
+
+    "groupby_aggregation": "groupby_aggregate",
+    "groupby_aggregations": "groupby_aggregate",
+    "group_by_aggregate": "groupby_aggregate",
+    "group_by_aggregation": "groupby_aggregate",
+    "group_by": "groupby_aggregate",
+
+    "time_analysis": "trend_analysis",
+    "monthly_trend": "trend_analysis",
+    "revenue_trend": "trend_analysis",
+}
+
+
 ALLOWED_OPERATIONS = {
-    "revenue_calculation",
-    "revenue_calculations",
-    "groupby_aggregation",
-    "group_by",
+    "calculate_revenue",
+    "create_shifted_column",
+    "groupby_aggregate",
     "find_max",
-    "statistics",
     "calculate_statistics",
     "categorical_analysis",
-
-    # Advanced analytics
     "rank_by_value",
-    "ranking",
     "calculate_percentage_change",
-    "percentage_change",
     "compare_columns",
-    "comparison",
-
-    # Shift / lag
-    "create_shifted_column",
-    "shift_column",
-    "shift",
-    "lag",
-
-    # Charts
+    "trend_analysis",
     "generate_bar_chart",
     "generate_line_chart",
 }
+
 
 
 DERIVED_REVENUE_ALIASES = {
@@ -622,6 +627,118 @@ def _validate_chart_step(
     return errors
 
 
+def normalize_plan(plan):
+    """
+    Normalize raw LLM planner output.
+
+    Supports:
+    - Python dictionaries
+    - JSON strings
+    - fenced JSON
+    - nested plan/result/data wrappers
+    """
+
+    # JSON returned by an LLM may arrive as a string.
+    if isinstance(plan, str):
+
+        raw = plan.strip()
+
+        # Remove markdown fences.
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+
+            if lines:
+                lines = lines[1:]
+
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+
+            raw = "\n".join(lines).strip()
+
+        try:
+            plan = json.loads(raw)
+        except (
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+    # The canonical planner output must be a dictionary.
+    if not isinstance(plan, dict):
+        return None
+
+    # Already canonical.
+    analysis_plan = plan.get("analysis_plan")
+
+    if isinstance(analysis_plan, list):
+        return {
+            "analysis_plan": analysis_plan
+        }
+
+    # Check common wrappers.
+    for key in (
+        "plan",
+        "result",
+        "validated_plan",
+        "data",
+    ):
+
+        value = plan.get(key)
+
+        # Nested JSON string.
+        if isinstance(value, str):
+
+            raw_value = value.strip()
+
+            if raw_value.startswith("```"):
+                lines = raw_value.splitlines()
+
+                if lines:
+                    lines = lines[1:]
+
+                if (
+                    lines
+                    and lines[-1].strip() == "```"
+                ):
+                    lines = lines[:-1]
+
+                raw_value = "\n".join(
+                    lines
+                ).strip()
+
+            try:
+                value = json.loads(raw_value)
+            except (
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                continue
+
+        if isinstance(value, dict):
+
+            nested_plan = value.get(
+                "analysis_plan"
+            )
+
+            if isinstance(
+                nested_plan,
+                list,
+            ):
+                return {
+                    "analysis_plan":
+                        nested_plan
+                }
+
+        if isinstance(value, list):
+            return {
+                "analysis_plan": value
+            }
+
+    return None
+
+
 def validate_plan(
     plan: Dict[str, Any],
     context: Dict[str, Any],
@@ -630,19 +747,31 @@ def validate_plan(
     errors: List[str] = []
     warnings: List[str] = []
 
-    if not isinstance(
-        plan,
-        dict,
-    ):
+    # ------------------------------------------------------
+    # Normalize raw LLM output before validation.
+    #
+    # The planner may return JSON text instead of a Python
+    # dictionary. normalize_plan() converts it into the
+    # canonical structure.
+    # ------------------------------------------------------
+
+    normalized_plan = normalize_plan(
+        plan
+    )
+
+    if normalized_plan is None:
 
         return {
             "valid": False,
             "errors": [
-                "Plan must be a dictionary."
+                "Plan could not be normalized into "
+                "a valid analysis plan."
             ],
             "warnings": [],
             "validated_plan": None,
         }
+
+    plan = normalized_plan
 
     analysis_plan = plan.get(
         "analysis_plan"
@@ -716,6 +845,18 @@ def validate_plan(
         operation = step.get(
             "operation"
         )
+
+        if operation:
+            normalized_operation = str(
+                operation
+            ).strip().lower()
+
+            operation = OPERATION_ALIASES.get(
+                normalized_operation,
+                normalized_operation,
+            )
+
+            step["operation"] = operation
 
         if not operation:
             operation = step.get(
