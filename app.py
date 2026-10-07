@@ -14,6 +14,86 @@ st.set_page_config(
     page_title="Autonomous AI Data Analyst",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+# ============================================================
+# CUSTOM UI
+# ============================================================
+
+st.markdown(
+    """
+<style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1500px;
+    }
+
+    .hero {
+        padding: 1.5rem 1.75rem;
+        border: 1px solid rgba(128,128,128,.20);
+        border-radius: 18px;
+        margin-bottom: 1.5rem;
+    }
+
+    .hero h1 {
+        margin-bottom: .35rem;
+        font-size: 2.25rem;
+    }
+
+    .hero p {
+        margin-bottom: 0;
+        opacity: .75;
+        font-size: 1.05rem;
+    }
+
+    .section-title {
+        font-size: 1.35rem;
+        font-weight: 700;
+        margin-top: 1.25rem;
+        margin-bottom: .75rem;
+    }
+
+    .status-card {
+        padding: 1rem 1.1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(128,128,128,.18);
+        min-height: 90px;
+    }
+
+    .status-label {
+        font-size: .78rem;
+        opacity: .65;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+    }
+
+    .status-value {
+        font-size: 1.35rem;
+        font-weight: 700;
+        margin-top: .25rem;
+    }
+
+    .upload-card {
+        padding: 1.25rem;
+        border-radius: 16px;
+        border: 1px dashed rgba(128,128,128,.35);
+        margin-bottom: 1rem;
+    }
+
+    .small-muted {
+        opacity: .65;
+        font-size: .85rem;
+    }
+
+    div[data-testid="stChatMessage"] {
+        border-radius: 14px;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 
@@ -21,17 +101,16 @@ st.set_page_config(
 # SESSION STATE
 # ============================================================
 
-if "dataset" not in st.session_state:
-    st.session_state.dataset = None
+DEFAULT_STATE = {
+    "dataset": None,
+    "dataset_name": None,
+    "conversation": [],
+    "analysis_count": 0,
+}
 
-if "dataset_name" not in st.session_state:
-    st.session_state.dataset_name = None
-
-if "conversation" not in st.session_state:
-    st.session_state.conversation = []
-
-if "analysis_count" not in st.session_state:
-    st.session_state.analysis_count = 0
+for key, value in DEFAULT_STATE.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ============================================================
@@ -39,27 +118,37 @@ if "analysis_count" not in st.session_state:
 # ============================================================
 
 def load_uploaded_file(uploaded_file):
-    """Load CSV or Excel into a DataFrame."""
+    """Load CSV or Excel data."""
 
-    if uploaded_file.name.lower().endswith(".csv"):
+    filename = uploaded_file.name.lower()
+
+    if filename.endswith(".csv"):
         return pd.read_csv(uploaded_file)
 
-    return pd.read_excel(uploaded_file)
+    if filename.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file)
+
+    raise ValueError("Unsupported file type.")
 
 
 # ============================================================
 # RESULT HELPERS
 # ============================================================
 
-def extract_chart_paths(result):
-    """Extract generated chart paths from execution results."""
-
+def get_execution_results(result):
     execution = result.get("execution") or {}
-    execution_results = execution.get("results", [])
+
+    results = execution.get("results", [])
+
+    return results if isinstance(results, list) else []
+
+
+def extract_chart_paths(result):
+    """Extract generated chart image paths."""
 
     chart_paths = []
 
-    for item in execution_results:
+    for item in get_execution_results(result):
 
         if item.get("status") != "success":
             continue
@@ -74,6 +163,9 @@ def extract_chart_paths(result):
 
         operation_result = item.get("result") or {}
 
+        if not isinstance(operation_result, dict):
+            continue
+
         output_path = operation_result.get("output_path")
 
         if output_path:
@@ -83,30 +175,24 @@ def extract_chart_paths(result):
 
 
 def extract_insights(result):
-    """
-    Extract verified business insights from the pipeline.
-
-    Pipeline structure:
-        result["insights"]["insights"]
-    """
+    """Extract pipeline-generated insights."""
 
     insights_wrapper = result.get("insights") or {}
 
-    if isinstance(insights_wrapper, dict):
-        insights = insights_wrapper.get("insights", [])
+    if not isinstance(insights_wrapper, dict):
+        return []
 
-        if isinstance(insights, list):
-            return insights
+    insights = insights_wrapper.get("insights", [])
 
-    return []
+    return insights if isinstance(insights, list) else []
 
 
 # ============================================================
-# DATASET OVERVIEW
+# DATASET HEALTH
 # ============================================================
 
-def render_dataset_overview(df):
-    """Render verified dataset quality and size metrics."""
+def render_dataset_health(df):
+    """Render dataset health metrics."""
 
     if df is None or df.empty:
         return
@@ -118,251 +204,70 @@ def render_dataset_overview(df):
 
     total_cells = rows * columns
 
-    if total_cells > 0:
-        missing_percentage = (
-            missing_cells / total_cells
-        ) * 100
-    else:
-        missing_percentage = 0.0
+    missing_pct = (
+        missing_cells / total_cells * 100
+        if total_cells
+        else 0
+    )
 
-    st.markdown("### 📊 Dataset Overview")
+    st.markdown(
+        '<div class="section-title">📊 Dataset Health</div>',
+        unsafe_allow_html=True,
+    )
 
-    col1, col2, col3, col4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
 
-    with col1:
-        st.metric(
-            "Rows",
-            f"{rows:,}",
-        )
+    with c1:
+        st.metric("Rows", f"{rows:,}")
 
-    with col2:
-        st.metric(
-            "Columns",
-            f"{columns:,}",
-        )
+    with c2:
+        st.metric("Columns", f"{columns:,}")
 
-    with col3:
+    with c3:
         st.metric(
             "Missing Cells",
             f"{missing_cells:,}",
-            f"{missing_percentage:.1f}%",
+            f"{missing_pct:.1f}%",
             delta_color="inverse",
         )
 
-    with col4:
+    with c4:
         st.metric(
             "Duplicate Rows",
             f"{duplicate_rows:,}",
         )
 
+
 # ============================================================
-# STRUCTURED ANALYSIS RESULTS
+# DATASET PREVIEW
 # ============================================================
 
-def render_structured_results(result):
-    """Render verified tabular results from executed operations."""
+def render_dataset_preview(df):
+    st.markdown(
+        '<div class="section-title">👀 Dataset Preview</div>',
+        unsafe_allow_html=True,
+    )
 
-    execution = result.get("execution") or {}
-    execution_results = execution.get("results", [])
-
-    tables = []
-
-    for item in execution_results:
-
-        if item.get("status") != "success":
-            continue
-
-        operation = item.get("operation", "")
-        operation_result = item.get("result") or {}
-
-        if not isinstance(operation_result, dict):
-            continue
-
-        # --------------------------------------------------------
-        # GROUPBY / AGGREGATION
-        # --------------------------------------------------------
-
-        if operation in {
-            "groupby_aggregation",
-            "groupby_aggregate",
-            "group_by",
-        }:
-
-            results = operation_result.get("results")
-
-            if isinstance(results, list) and results:
-                rows = []
-
-                for row in results:
-                    if not isinstance(row, dict):
-                        continue
-
-                    rows.append(row)
-
-                if rows:
-                    tables.append(
-                        (
-                            "Regional / Group Analysis",
-                            rows,
-                        )
-                    )
-
-        # --------------------------------------------------------
-        # RANKING
-        # --------------------------------------------------------
-
-        elif operation == "rank_by_value":
-
-            results = operation_result.get("results")
-
-            if isinstance(results, list) and results:
-                rows = []
-
-                for row in results:
-                    if not isinstance(row, dict):
-                        continue
-
-                    rows.append(row)
-
-                if rows:
-                    tables.append(
-                        (
-                            "Ranking Analysis",
-                            rows,
-                        )
-                    )
-
-        # --------------------------------------------------------
-        # CATEGORICAL ANALYSIS
-        # --------------------------------------------------------
-
-        elif operation == "categorical_analysis":
-
-            counts = operation_result.get("counts")
-
-            if isinstance(counts, dict) and counts:
-
-                rows = [
-                    {
-                        "category": category,
-                        "count": count,
-                    }
-                    for category, count in counts.items()
-                ]
-
-                tables.append(
-                    (
-                        "Category Distribution",
-                        rows,
-                    )
-                )
-
-        # --------------------------------------------------------
-        # STATISTICS
-        # --------------------------------------------------------
-
-        elif operation == "statistics":
-
-            statistics = operation_result.get("statistics")
-
-            if isinstance(statistics, dict) and statistics:
-
-                rows = [
-                    {
-                        "metric": key,
-                        "value": value,
-                    }
-                    for key, value in statistics.items()
-                ]
-
-                tables.append(
-                    (
-                        "Statistical Summary",
-                        rows,
-                    )
-                )
-
-    if not tables:
-        return
-
-    st.markdown("### 📋 Analysis Results")
-
-    for title, rows in tables:
-
-        st.markdown(f"#### {title}")
-
-        display_df = pd.DataFrame(rows)
-
+    with st.expander("Preview first 20 rows", expanded=False):
         st.dataframe(
-            display_df,
+            df.head(20),
             width="stretch",
             hide_index=True,
         )
 
-# ============================================================
-# BUSINESS INSIGHTS UI
-# ============================================================
-
-def render_business_insights(result):
-    """Render deterministic business insights from the pipeline."""
-
-    insights_data = result.get("insights") or {}
-
-    if not isinstance(insights_data, dict):
-        return
-
-    insights = insights_data.get("insights", [])
-
-    if not isinstance(insights, list) or not insights:
-        return
-
-    st.markdown("### 💡 Business Insights")
-
-    for insight in insights:
-
-        if not isinstance(insight, dict):
-            continue
-
-        message = insight.get("message")
-
-        if not message:
-            continue
-
-        insight_type = str(
-            insight.get("type", "")
-        ).lower()
-
-        if "highest" in insight_type or "maximum" in insight_type:
-            st.success(f"📈 {message}")
-
-        elif "lowest" in insight_type:
-            st.warning(f"📉 {message}")
-
-        elif "decrease" in message.lower():
-            st.warning(f"📊 {message}")
-
-        elif "increase" in message.lower():
-            st.success(f"📊 {message}")
-
-        else:
-            st.info(f"🔎 {message}")
-
 
 # ============================================================
-# STRUCTURED ANALYSIS RESULTS
+# STRUCTURED RESULTS
 # ============================================================
 
 def render_structured_results(result):
-    """Render verified tabular results from executed operations."""
-
-    execution = result.get("execution") or {}
-    execution_results = execution.get("results", [])
+    """Render structured outputs from successful operations."""
 
     group_rows = []
     ranking_rows = []
     other_tables = []
 
-    for item in execution_results:
+    for item in get_execution_results(result):
 
         if item.get("status") != "success":
             continue
@@ -373,10 +278,7 @@ def render_structured_results(result):
         if not isinstance(operation_result, dict):
             continue
 
-        # --------------------------------------------------------
-        # GROUPBY / AGGREGATION
-        # --------------------------------------------------------
-
+        # GROUPBY
         if operation in {
             "groupby_aggregation",
             "groupby_aggregate",
@@ -385,22 +287,18 @@ def render_structured_results(result):
 
             results = operation_result.get("results")
 
-            if isinstance(results, list) and results:
+            if isinstance(results, list):
 
                 for row in results:
-
                     if isinstance(row, dict):
                         group_rows.append(row)
 
-        # --------------------------------------------------------
         # RANKING
-        # --------------------------------------------------------
-
         elif operation == "rank_by_value":
 
             results = operation_result.get("results")
 
-            if isinstance(results, list) and results:
+            if isinstance(results, list):
 
                 ascending = bool(
                     operation_result.get(
@@ -424,7 +322,7 @@ def render_structured_results(result):
                         {
                             "Direction": direction,
                             "Rank": row.get("rank"),
-                            "Region": row.get(
+                            "Group": row.get(
                                 "group",
                                 row.get(
                                     "Region",
@@ -441,36 +339,32 @@ def render_structured_results(result):
                         }
                     )
 
-        # --------------------------------------------------------
-        # CATEGORICAL ANALYSIS
-        # --------------------------------------------------------
-
+        # CATEGORICAL
         elif operation == "categorical_analysis":
 
             counts = operation_result.get("counts")
 
             if isinstance(counts, dict) and counts:
 
-                rows = [
-                    {
-                        "Category": category,
-                        "Count": count,
-                    }
-                    for category, count in counts.items()
-                ]
-
                 other_tables.append(
                     (
                         "Category Distribution",
-                        rows,
+                        [
+                            {
+                                "Category": category,
+                                "Count": count,
+                            }
+                            for category, count
+                            in counts.items()
+                        ],
                     )
                 )
 
-        # --------------------------------------------------------
         # STATISTICS
-        # --------------------------------------------------------
-
-        elif operation == "statistics":
+        elif operation in {
+            "statistics",
+            "calculate_statistics",
+        }:
 
             statistics = operation_result.get(
                 "statistics"
@@ -478,37 +372,31 @@ def render_structured_results(result):
 
             if isinstance(statistics, dict) and statistics:
 
-                rows = [
-                    {
-                        "Metric": key,
-                        "Value": value,
-                    }
-                    for key, value in statistics.items()
-                ]
-
                 other_tables.append(
                     (
                         "Statistical Summary",
-                        rows,
+                        [
+                            {
+                                "Metric": key,
+                                "Value": value,
+                            }
+                            for key, value
+                            in statistics.items()
+                        ],
                     )
                 )
 
-    # ------------------------------------------------------------
-    # NOTHING TO DISPLAY
-    # ------------------------------------------------------------
-
-    if (
-        not group_rows
-        and not ranking_rows
-        and not other_tables
+    if not (
+        group_rows
+        or ranking_rows
+        or other_tables
     ):
         return
 
-    st.markdown("### 📋 Analysis Results")
-
-    # ------------------------------------------------------------
-    # REGIONAL / GROUP ANALYSIS
-    # ------------------------------------------------------------
+    st.markdown(
+        '<div class="section-title">📋 Analysis Results</div>',
+        unsafe_allow_html=True,
+    )
 
     if group_rows:
 
@@ -534,9 +422,7 @@ def render_structured_results(result):
                 kind="stable",
             )
 
-        st.markdown(
-            "#### 🌎 Regional / Group Analysis"
-        )
+        st.markdown("#### 🌎 Group Analysis")
 
         st.dataframe(
             display_df,
@@ -544,25 +430,13 @@ def render_structured_results(result):
             hide_index=True,
         )
 
-    # ------------------------------------------------------------
-    # PERFORMANCE HIGHLIGHTS
-    # ------------------------------------------------------------
-
     if ranking_rows:
 
         ranking_df = pd.DataFrame(
             ranking_rows
-        ).drop_duplicates(
-            subset=[
-                "Direction",
-                "Region",
-                "Value",
-            ]
-        )
+        ).drop_duplicates()
 
-        st.markdown(
-            "#### 🏆 Performance Highlights"
-        )
+        st.markdown("#### 🏆 Performance Highlights")
 
         st.dataframe(
             ranking_df,
@@ -570,67 +444,63 @@ def render_structured_results(result):
             hide_index=True,
         )
 
-    # ------------------------------------------------------------
-    # OTHER STRUCTURED RESULTS
-    # ------------------------------------------------------------
-
     for title, rows in other_tables:
 
-        st.markdown(
-            f"#### {title}"
-        )
-
-        display_df = pd.DataFrame(rows)
+        st.markdown(f"#### {title}")
 
         st.dataframe(
-            display_df,
+            pd.DataFrame(rows),
             width="stretch",
             hide_index=True,
         )
+
+
 # ============================================================
-# EXECUTION SUMMARY
+# BUSINESS INSIGHTS
 # ============================================================
 
-def render_execution_summary(result):
-    """Render execution metrics."""
+def render_business_insights(result):
+    """Render verified business insights."""
 
-    execution = result.get("execution") or {}
-    execution_results = execution.get("results", [])
+    insights = extract_insights(result)
 
-    if not execution_results:
+    if not insights:
         return
 
-    successful_steps = sum(
-        1
-        for item in execution_results
-        if item.get("status") == "success"
+    st.markdown(
+        '<div class="section-title">💡 Business Insights</div>',
+        unsafe_allow_html=True,
     )
 
-    failed_steps = sum(
-        1
-        for item in execution_results
-        if item.get("status") != "success"
-    )
+    for insight in insights:
 
-    col1, col2, col3 = st.columns(3)
+        if not isinstance(insight, dict):
+            continue
 
-    with col1:
-        st.metric(
-            "Operations",
-            len(execution_results),
-        )
+        message = insight.get("message")
 
-    with col2:
-        st.metric(
-            "Successful",
-            successful_steps,
-        )
+        if not message:
+            continue
 
-    with col3:
-        st.metric(
-            "Failed",
-            failed_steps,
-        )
+        insight_type = str(
+            insight.get("type", "")
+        ).lower()
+
+        if (
+            "highest" in insight_type
+            or "maximum" in insight_type
+            or "increase" in message.lower()
+        ):
+            st.success(f"📈 {message}")
+
+        elif (
+            "lowest" in insight_type
+            or "decrease" in message.lower()
+        ):
+            st.warning(f"📉 {message}")
+
+        else:
+            st.info(f"🔎 {message}")
 
 
 # ============================================================
@@ -638,46 +508,107 @@ def render_execution_summary(result):
 # ============================================================
 
 def render_charts(chart_paths):
-    """Render generated charts."""
+    """Render generated chart images."""
 
-    if not chart_paths:
+    valid_paths = []
+
+    for chart_path in chart_paths:
+
+        if Path(chart_path).exists():
+            valid_paths.append(chart_path)
+
+    if not valid_paths:
         return
 
-    st.markdown("### 📊 Visualizations")
+    st.markdown(
+        '<div class="section-title">📈 Visualizations</div>',
+        unsafe_allow_html=True,
+    )
 
-    for index, chart_path in enumerate(
-        chart_paths,
-        start=1,
-    ):
+    columns = st.columns(
+        min(2, len(valid_paths))
+    )
 
-        path = Path(chart_path)
+    for index, chart_path in enumerate(valid_paths):
 
-        if path.exists():
+        with columns[index % len(columns)]:
 
             st.image(
-                str(path),
-                caption=f"Generated chart {index}",
+                chart_path,
+                caption=f"Generated visualization {index + 1}",
                 width="stretch",
             )
 
-        else:
 
-            st.warning(
-                f"Chart {index} was generated but "
-                f"the file could not be found: "
-                f"`{chart_path}`"
+# ============================================================
+# EXECUTION SUMMARY
+# ============================================================
+
+def render_execution_summary(result):
+    """Render execution statistics."""
+
+    execution_results = get_execution_results(result)
+
+    if not execution_results:
+        return
+
+    successful = sum(
+        1
+        for item in execution_results
+        if item.get("status") == "success"
+    )
+
+    failed = len(execution_results) - successful
+
+    autonomous = result.get("autonomous") or {}
+
+    rounds = autonomous.get("rounds")
+
+    st.markdown(
+        '<div class="section-title">⚙️ Execution Summary</div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric(
+            "Operations",
+            len(execution_results),
+        )
+
+    with c2:
+        st.metric(
+            "Successful",
+            successful,
+        )
+
+    with c3:
+        st.metric(
+            "Failed",
+            failed,
+        )
+
+    with c4:
+        if rounds is not None:
+            st.metric(
+                "Autonomous Rounds",
+                rounds,
+            )
+        else:
+            st.metric(
+                "Autonomous",
+                "Completed",
             )
 
 
 # ============================================================
-# EXECUTION OPERATIONS
+# EXECUTED OPERATIONS
 # ============================================================
 
 def render_execution_operations(result):
-    """Show executed operations."""
 
-    execution = result.get("execution") or {}
-    execution_results = execution.get("results", [])
+    execution_results = get_execution_results(result)
 
     if not execution_results:
         return
@@ -716,77 +647,103 @@ def render_execution_operations(result):
 
 
 # ============================================================
-# CONVERSATION RENDERING
+# ANALYSIS DETAILS
+# ============================================================
+
+def render_analysis_details(result):
+
+    with st.expander(
+        "🔍 Technical Analysis Details",
+        expanded=False,
+    ):
+        st.json(result)
+
+
+# ============================================================
+# ANALYSIS RESULT
+# ============================================================
+
+def render_analysis_result(
+    result,
+    final_response,
+    chart_paths,
+):
+    """Render a completed analysis."""
+
+    status = result.get("status")
+
+    if status == "success":
+
+        st.success(
+            "Analysis completed successfully."
+        )
+
+    elif status in {
+        "partial",
+        "partial_success",
+    }:
+
+        st.warning(
+            "Analysis completed with some errors."
+        )
+
+    else:
+
+        st.error(
+            "Analysis failed."
+        )
+
+    if final_response:
+        st.markdown(final_response)
+
+    render_business_insights(result)
+
+    render_structured_results(result)
+
+    render_charts(chart_paths)
+
+    render_execution_summary(result)
+
+    render_execution_operations(result)
+
+    render_analysis_details(result)
+
+
+# ============================================================
+# CONVERSATION HISTORY
 # ============================================================
 
 def render_conversation_item(item):
-    """Render one previous analysis."""
 
     query = item.get("query", "")
     response = item.get("response", "")
     result = item.get("result") or {}
     chart_paths = item.get("chart_paths", [])
 
-    status = result.get("status")
-
     with st.chat_message("user"):
         st.markdown(query)
 
     with st.chat_message("assistant"):
 
-        if status == "success":
-            st.success(
-                "Analysis completed successfully."
-            )
-
-        elif status in {
-            "partial",
-            "partial_success",
-        }:
-            st.warning(
-                "Analysis completed with some errors."
-            )
-
-        else:
-            st.error(
-                "Analysis failed."
-            )
-
-        if response:
-            st.markdown(response)
-
-        render_structured_results(result)
-
-        render_business_insights(result)
-
-        render_charts(chart_paths)
-
-        render_execution_summary(result)
-
-        render_execution_operations(result)
-
-        with st.expander(
-            "🔍 Analysis Details",
-            expanded=False,
-        ):
-            st.json(result)
+        render_analysis_result(
+            result=result,
+            final_response=response,
+            chart_paths=chart_paths,
+        )
 
 
-# ============================================================
-# HEADER
-# ============================================================
+def render_conversation_history():
 
-st.title(
-    "📊 Autonomous AI Data Analyst"
-)
+    if not st.session_state.conversation:
+        return
 
-st.markdown(
-    """
-Upload a CSV or Excel business file and let an autonomous AI
-system **plan, execute, analyze, visualize, and explain**
-your data.
-"""
-)
+    st.markdown(
+        '<div class="section-title">💬 Analysis History</div>',
+        unsafe_allow_html=True,
+    )
+
+    for item in st.session_state.conversation:
+        render_conversation_item(item)
 
 
 # ============================================================
@@ -795,7 +752,7 @@ your data.
 
 with st.sidebar:
 
-    st.header("⚙️ Configuration")
+    st.markdown("## ⚙️ Analyst Settings")
 
     provider = st.selectbox(
         "LLM Provider",
@@ -803,13 +760,8 @@ with st.sidebar:
         index=0,
     )
 
-    st.divider()
-
-    st.markdown("### 🤖 AI Engine")
-
-    st.info(
-        "NVIDIA Nemotron is currently configured as "
-        "the primary analysis model."
+    st.caption(
+        "NVIDIA Nemotron is the configured analysis provider."
     )
 
     st.divider()
@@ -818,7 +770,7 @@ with st.sidebar:
 
         st.markdown("### 📁 Current Dataset")
 
-        st.caption(
+        st.write(
             st.session_state.dataset_name
         )
 
@@ -826,19 +778,13 @@ with st.sidebar:
             st.session_state.dataset.shape
         )
 
-        col1, col2 = st.columns(2)
+        c1, c2 = st.columns(2)
 
-        with col1:
-            st.metric(
-                "Rows",
-                f"{rows:,}",
-            )
+        with c1:
+            st.metric("Rows", f"{rows:,}")
 
-        with col2:
-            st.metric(
-                "Columns",
-                f"{columns:,}",
-            )
+        with c2:
+            st.metric("Columns", f"{columns:,}")
 
         st.divider()
 
@@ -862,19 +808,42 @@ with st.sidebar:
     st.divider()
 
     st.caption(
-        "Upload → Plan → Execute → Recover → Insight → Explain"
+        "Upload → Understand → Plan → Execute → Recover → Explain"
     )
 
 
 # ============================================================
-# FILE UPLOAD
+# HERO
 # ============================================================
 
-st.subheader("📁 Upload Business Data")
+st.markdown(
+    """
+<div class="hero">
+    <h1>📊 Autonomous AI Data Analyst</h1>
+    <p>
+        Upload business data, ask questions in natural language,
+        and let the analyst plan, execute, visualize and explain
+        the investigation automatically.
+    </p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# UPLOAD
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">📁 Your Dataset</div>',
+    unsafe_allow_html=True,
+)
 
 uploaded_file = st.file_uploader(
-    "Choose a CSV or Excel file",
+    "Upload a CSV or Excel business file",
     type=["csv", "xlsx"],
+    help="Supported formats: CSV and XLSX.",
 )
 
 
@@ -897,19 +866,23 @@ if uploaded_file is not None:
                 uploaded_file
             )
 
+            if new_df.empty:
+                st.error(
+                    "The uploaded dataset is empty."
+                )
+                st.stop()
+
         except Exception as exc:
 
             st.error(
                 f"Could not read the uploaded file: {exc}"
             )
-
             st.stop()
 
         st.session_state.dataset = new_df
         st.session_state.dataset_name = (
             uploaded_file.name
         )
-
         st.session_state.conversation = []
         st.session_state.analysis_count = 0
 
@@ -917,32 +890,30 @@ if uploaded_file is not None:
             f"Loaded `{uploaded_file.name}` successfully."
         )
 
-else:
+elif st.session_state.dataset is None:
 
-    if st.session_state.dataset is None:
+    st.info(
+        "Upload a CSV or Excel file above to start."
+    )
 
-        st.info(
-            "Upload a CSV or Excel file to start your analysis."
-        )
+    st.markdown(
+        """
+### 🤖 What your analyst can do
 
-        st.markdown(
-            """
-### What this system can do
-
-- 📊 Analyze business datasets
-- 🔢 Calculate business metrics
-- 🧮 Perform aggregations
-- 🏆 Find highest/lowest performers
-- 📈 Generate visualizations
-- 🤖 Automatically plan analysis steps
-- 🔄 Recover from execution failures
+- 📊 Understand business datasets
+- 🔢 Calculate metrics
+- 🧮 Aggregate and compare data
+- 🏆 Find highest and lowest performers
+- 📈 Detect trends
+- 📉 Generate charts
+- 🔄 Recover from execution problems
 - 💡 Detect verified business insights
-- 🧠 Generate business-friendly explanations
-- 💬 Continue asking questions about the same dataset
+- 🧠 Continue multi-step investigations
+- 💬 Answer follow-up questions about the same dataset
 """
-        )
+    )
 
-        st.stop()
+    st.stop()
 
 
 # ============================================================
@@ -951,52 +922,38 @@ else:
 
 df = st.session_state.dataset
 
-st.success(
-    f"Dataset ready: `{st.session_state.dataset_name}`"
+st.caption(
+    f"Active dataset: `{st.session_state.dataset_name}`"
 )
 
-# ============================================================
-# DATASET OVERVIEW
-# ============================================================
+render_dataset_health(df)
 
-render_dataset_overview(df)
+render_dataset_preview(df)
 
 
 # ============================================================
-# DATASET PREVIEW
+# HISTORY
 # ============================================================
 
-with st.expander(
-    "👀 Preview Dataset",
-    expanded=False,
-):
-
-    st.dataframe(
-        df.head(20),
-        width="stretch",
-    )
+render_conversation_history()
 
 
 # ============================================================
-# ANALYSIS HISTORY
+# ANALYST CHAT
 # ============================================================
 
-if st.session_state.conversation:
+st.markdown(
+    '<div class="section-title">🤖 Ask Your Data Analyst</div>',
+    unsafe_allow_html=True,
+)
 
-    st.markdown("## 💬 Analysis History")
-
-    for item in st.session_state.conversation:
-        render_conversation_item(item)
-
-
-# ============================================================
-# CURRENT QUERY
-# ============================================================
-
-st.markdown("## 🔎 Ask Your Data Analyst")
+st.caption(
+    "Ask a business question in natural language. "
+    "The autonomous engine decides which analysis steps are required."
+)
 
 user_query = st.chat_input(
-    "Ask a business question about your dataset..."
+    "Example: Which region generated the highest revenue?"
 )
 
 
@@ -1035,7 +992,8 @@ if user_query:
                                 "",
                             ),
                         }
-                        for item in st.session_state.conversation
+                        for item
+                        in st.session_state.conversation
                     ],
                 )
 
@@ -1047,86 +1005,20 @@ if user_query:
 
                 st.stop()
 
-        status = result.get("status")
-
-        if status == "success":
-
-            st.success(
-                "Analysis completed successfully."
-            )
-
-        elif status in {
-            "partial",
-            "partial_success",
-        }:
-
-            st.warning(
-                "Analysis completed with some errors."
-            )
-
-        else:
-
-            st.error(
-                "Analysis failed."
-            )
-
         final_response = (
             result.get("final_response")
             or "No final response was generated."
         )
 
-        st.markdown(final_response)
-
-        # ----------------------------------------------------
-        # STRUCTURED ANALYSIS RESULTS
-        # ----------------------------------------------------
-
-        render_structured_results(result)
-
-        # ----------------------------------------------------
-        # VERIFIED BUSINESS INSIGHTS
-        # ----------------------------------------------------
-
-        render_business_insights(result)
-
-        # ----------------------------------------------------
-        # CHARTS
-        # ----------------------------------------------------
-
         chart_paths = extract_chart_paths(
             result
         )
 
-        render_charts(
-            chart_paths
+        render_analysis_result(
+            result=result,
+            final_response=final_response,
+            chart_paths=chart_paths,
         )
-
-        # ----------------------------------------------------
-        # EXECUTION SUMMARY
-        # ----------------------------------------------------
-
-        render_execution_summary(
-            result
-        )
-
-        # ----------------------------------------------------
-        # EXECUTION OPERATIONS
-        # ----------------------------------------------------
-
-        render_execution_operations(
-            result
-        )
-
-        # ----------------------------------------------------
-        # DETAILS
-        # ----------------------------------------------------
-
-        with st.expander(
-            "🔍 Analysis Details",
-            expanded=False,
-        ):
-
-            st.json(result)
 
     # --------------------------------------------------------
     # SAVE CONVERSATION
@@ -1142,5 +1034,3 @@ if user_query:
     )
 
     st.session_state.analysis_count += 1
-
-    st.rerun()
