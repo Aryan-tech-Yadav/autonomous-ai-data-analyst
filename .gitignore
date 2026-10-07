@@ -19,3 +19,10 @@ src/agent/pipeline.py.backup
 
 # Local agent/tool metadata
 .agents/
+
+# Development backups
+backups/
+*.backup
+*.backup_*
+*.before_*
+*.current_*
