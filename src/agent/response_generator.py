@@ -1,23 +1,25 @@
+from __future__ import annotations
+
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from src.llm.router import LLMRouter
 
 
 class ResponseGenerator:
     """
-    Generate the final natural-language response from
-    deterministic and autonomous analysis results.
+    Production response engine for the autonomous AI data analyst.
 
-    The generator is responsible only for explaining
-    already-executed results. It must never perform
-    new analysis or invent missing facts.
+    Responsibilities:
+    - Explain already-executed analysis results.
+    - Use verified business insights when available.
+    - Resolve conversational references from supplied history.
+    - Never perform new dataframe analysis.
+    - Never invent unsupported facts.
+    - Provide a deterministic fallback when the LLM is unavailable.
     """
 
-    def __init__(
-        self,
-        provider: str = "nvidia",
-    ):
+    def __init__(self, provider: str = "nvidia"):
         self.provider = provider
         self.router = LLMRouter()
 
@@ -32,244 +34,50 @@ class ResponseGenerator:
         insights: list[dict] | None = None,
         conversation_history: list[dict] | None = None,
     ) -> str:
-        """
-        Generate a concise business-friendly answer.
+        safe_results = self._sanitize(execution_results)
+        safe_insights = self._sanitize(insights or [])
+        history = conversation_history or []
 
-        Falls back to deterministic formatting if the LLM
-        is unavailable or returns an unusable response.
-        """
-
-        safe_results = self._sanitize(
-            execution_results
-        )
-
-        safe_insights = self._sanitize(
-            insights or []
-        )
-
-        has_analysis_results = bool(
+        has_results = bool(
             isinstance(safe_results, dict)
             and safe_results.get("results")
         )
 
-        if not has_analysis_results and not conversation_history:
+        if not has_results and history:
+            return self._generate_follow_up_from_history(
+                user_query=user_query,
+                conversation_history=history,
+            )
+
+        if not has_results:
             return (
                 "I could not generate an answer because "
                 "no analysis results were available."
             )
 
-        if not has_analysis_results and conversation_history:
-            system_prompt = """
-You are the conversational response engine of an
-autonomous AI data analyst.
+        system_prompt = self._build_system_prompt()
 
-The user is asking a follow-up question about a
-previous conversation.
-
-Your job is to answer ONLY from the provided
-conversation history.
-
-STRICT RULES:
-
-1. Resolve references such as "it", "its", "that",
-   "those", "previous", "earlier", and "the highest"
-   using the conversation history.
-
-2. Answer directly and concisely.
-
-3. Use ONLY facts explicitly present in the
-   conversation history.
-
-4. Never invent numbers, rankings, metrics,
-   regions, charts, or conclusions.
-
-5. If the conversation history does not contain
-   enough information to answer, say that the
-   previous conversation does not contain enough
-   information.
-
-6. Do NOT perform new dataset analysis.
-
-7. Do NOT create a chart.
-
-8. Do NOT mention internal planner, executor,
-   pipeline, model, API, or implementation details.
-
-Previous conversation history:
-
-""" + str(conversation_history) + """
-
-Current user question:
-
-""" + user_query
-
-            try:
-                response = self.router.generate(
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_prompt,
-                        },
-                        {
-                            "role": "user",
-                            "content": user_query,
-                        },
-                    ],
-                    provider=self.provider,
-                    temperature=0.1,
-                    max_tokens=1024,
-                )
-
-                response = (response or "").strip()
-
-                if response:
-                    return response
-
-            except Exception:
-                pass
-
-            return (
-                "I could not resolve that question from "
-                "the previous conversation."
-            )
-
-        system_prompt = """
-You are the final response engine of an
-autonomous AI data analyst.
-
-Your job is to explain analysis results that
-have ALREADY been executed.
-
-The execution results are authoritative.
-
-STRICT RULES:
-
-1. Answer the user's original question directly.
-
-2. Use ONLY facts contained in the provided
-   execution results.
-
-3. Never invent numbers, rankings, trends,
-   categories, dates, business facts, or conclusions.
-
-4. Never perform additional calculations that
-   are not explicitly supported by the results.
-
-5. Never invent a currency symbol or currency code.
-
-6. If the dataset does not explicitly identify
-   a currency, report monetary values without
-   assuming INR, USD, EUR, GBP, or another currency.
-
-7. Preserve the meaning and values of the
-   execution results.
-
-8. You may format large numbers with commas
-   for readability.
-
-9. If a regional or categorical breakdown exists,
-   include the important breakdown when relevant.
-
-10. If a maximum/minimum result exists, clearly
-    identify it.
-
-11. If a chart was generated and an output path
-    exists, mention that the chart was generated
-    and provide the path.
-
-12. Do not claim that a chart exists unless the
-    execution results explicitly contain an
-    output_path.
-
-13. Do not expose internal implementation details.
-
-14. Never mention:
-    - planner
-    - adapter
-    - executor
-    - validator
-    - LLM
-    - model
-    - API
-    - prompt
-    - autonomous loop
-
-15. If the execution results are incomplete,
-    explicitly state what could not be determined.
-
-16. Do not apologize unnecessarily.
-
-17. Keep the final answer concise, clear,
-    professional, and business-friendly.
-
-18. Return ONLY the final natural-language answer.
-"""
-
-        user_prompt = f"""
-USER QUESTION:
-
-{user_query}
-
-
-PREVIOUS CONVERSATION HISTORY:
-
-{json.dumps(
-    conversation_history or [],
-    indent=2,
-    ensure_ascii=False,
-)}
-
-
-EXECUTED ANALYSIS RESULTS:
-
-{json.dumps(
-    safe_results,
-    indent=2,
-    ensure_ascii=False,
-)}
-
-
-VERIFIED BUSINESS INSIGHTS:
-
-{json.dumps(
-    safe_insights,
-    indent=2,
-    ensure_ascii=False,
-)}
-
-
-Use the previous conversation history to resolve
-references such as "it", "its", "that", "those",
-"previous", and "earlier".
-
-If the current execution results contain the answer,
-prefer the execution results.
-
-If the current execution results do not contain the
-answer but the previous conversation does, answer
-from the previous conversation.
-
-Do not invent information.
-
-Write ONLY the final natural-language answer.
-"""
-
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ]
+        user_prompt = self._build_user_prompt(
+            user_query=user_query,
+            execution_results=safe_results,
+            insights=safe_insights,
+            conversation_history=history,
+        )
 
         try:
             response = self.router.generate(
-                messages=messages,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt,
+                    },
+                ],
                 provider=self.provider,
-                temperature=0.2,
+                temperature=0.15,
                 max_tokens=1200,
             )
 
@@ -279,7 +87,7 @@ Write ONLY the final natural-language answer.
                 else ""
             )
 
-            if response:
+            if self._is_usable_response(response):
                 return response
 
         except Exception:
@@ -292,79 +100,272 @@ Write ONLY the final natural-language answer.
         )
 
     # ==========================================================
+    # LLM PROMPTS
+    # ==========================================================
+
+    def _build_system_prompt(self) -> str:
+        return """
+You are the final business response engine of an autonomous AI
+data analyst.
+
+Your job is to explain analysis results that have ALREADY been
+executed and verified.
+
+The execution results and verified insights are authoritative.
+
+STRICT RULES:
+
+1. Answer the user's question directly.
+
+2. Use ONLY information contained in the supplied execution
+   results, verified insights, and conversation history.
+
+3. Never invent numbers, rankings, categories, dates, trends,
+   business facts, causes, or recommendations.
+
+4. Never perform new calculations unless the exact calculation
+   is already explicitly represented by the supplied results.
+
+5. Never invent or assume a currency.
+
+6. If currency is not explicitly identified, report monetary
+   values without a currency symbol or currency code.
+
+7. Prefer verified business insights when they directly answer
+   the user's question.
+
+8. Do not dump every available result. Select only the facts
+   relevant to the user's question.
+
+9. For ranking questions, clearly identify the relevant highest,
+   lowest, or requested ranked items.
+
+10. For trend questions, mention the important high/low periods
+    and verified overall movement when available.
+
+11. For comparison questions, clearly state the verified
+    comparison.
+
+12. For categorical questions, identify the relevant dominant
+    category when verified.
+
+13. If a chart was actually generated and an output_path exists,
+    mention it only when relevant.
+
+14. Do not claim a chart exists unless output_path is explicitly
+    present.
+
+15. If the results are incomplete, clearly say what cannot be
+    determined.
+
+16. Resolve conversational references such as "it", "its",
+    "that", "those", "the highest", "the lowest", "previous",
+    and "earlier" using the supplied conversation history.
+
+17. Do not perform new dataset analysis.
+
+18. Do not mention internal implementation details.
+
+Never mention:
+- planner
+- adapter
+- executor
+- validator
+- model
+- API
+- prompt
+- autonomous loop
+- internal pipeline
+
+19. Keep the response concise, clear, professional, and
+    business-friendly.
+
+20. Return ONLY the final answer.
+""".strip()
+
+    def _build_user_prompt(
+        self,
+        user_query: str,
+        execution_results: Dict[str, Any],
+        insights: list[dict],
+        conversation_history: list[dict],
+    ) -> str:
+        return f"""
+USER QUESTION:
+{user_query}
+
+PREVIOUS CONVERSATION:
+{json.dumps(
+    conversation_history,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+EXECUTED ANALYSIS RESULTS:
+{json.dumps(
+    execution_results,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+VERIFIED BUSINESS INSIGHTS:
+{json.dumps(
+    insights,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+RESPONSE INSTRUCTIONS:
+
+First determine what the user is asking.
+
+Then select only the verified facts needed to answer that
+question.
+
+If the current execution results answer the question, prefer
+them over conversation history.
+
+If the current execution results do not contain the answer but
+the conversation history explicitly contains it, answer from
+the history.
+
+Do not invent missing information.
+
+Write only the final business-friendly answer.
+""".strip()
+
+    def _generate_follow_up_from_history(
+        self,
+        user_query: str,
+        conversation_history: list[dict],
+    ) -> str:
+        system_prompt = """
+You are a conversational response engine for a data analyst.
+
+The current question has no new analysis results.
+
+Answer ONLY from the supplied previous conversation.
+
+Resolve references such as:
+- it
+- its
+- that
+- those
+- the highest
+- the lowest
+- previous
+- earlier
+
+STRICT RULES:
+
+1. Never invent facts or numbers.
+2. Never perform new dataset analysis.
+3. Never create a chart.
+4. If the history does not contain enough information, clearly
+   say that the previous conversation does not contain enough
+   information.
+5. Keep the answer concise.
+6. Do not mention internal implementation details.
+7. Return only the final answer.
+""".strip()
+
+        user_prompt = f"""
+PREVIOUS CONVERSATION:
+{json.dumps(
+    conversation_history,
+    indent=2,
+    ensure_ascii=False,
+)}
+
+CURRENT QUESTION:
+{user_query}
+""".strip()
+
+        try:
+            response = self.router.generate(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt,
+                    },
+                ],
+                provider=self.provider,
+                temperature=0.1,
+                max_tokens=800,
+            )
+
+            response = (
+                response.strip()
+                if isinstance(response, str)
+                else ""
+            )
+
+            if self._is_usable_response(response):
+                return response
+
+        except Exception:
+            pass
+
+        return (
+            "I could not resolve that question from "
+            "the previous conversation."
+        )
+
+    # ==========================================================
     # SANITIZATION
     # ==========================================================
 
-    def _sanitize(
-        self,
-        value: Any,
-    ) -> Any:
+    def _sanitize(self, value: Any) -> Any:
         """
-        Convert execution results into JSON-safe data.
+        Convert results into JSON-safe prompt data.
 
-        Internal pandas Series/DataFrame objects and
-        potentially huge intermediate values are removed.
+        Large/internal dataframe objects and intermediate revenue
+        Series are excluded from the final LLM context.
         """
 
         if isinstance(value, dict):
-
             sanitized = {}
 
             for key, item in value.items():
-
                 key_string = str(key)
 
-                # Internal intermediate revenue Series
-                # should never be sent to the LLM.
-                if key_string == "revenue":
-                    continue
-
-                # Internal dataframe-like objects should
-                # not enter the final prompt.
                 if key_string in {
+                    "revenue",
                     "working_df",
                     "dataframe",
                     "df",
                 }:
                     continue
 
-                sanitized[key_string] = (
-                    self._sanitize(item)
-                )
+                sanitized[key_string] = self._sanitize(item)
 
             return sanitized
 
         if isinstance(value, list):
-
             return [
                 self._sanitize(item)
                 for item in value
             ]
 
         if isinstance(value, tuple):
-
             return [
                 self._sanitize(item)
                 for item in value
             ]
 
         if hasattr(value, "item"):
-
             try:
                 return value.item()
-
             except Exception:
                 pass
 
         if hasattr(value, "tolist"):
-
             try:
-                converted = value.tolist()
-
-                return self._sanitize(
-                    converted
-                )
-
+                return self._sanitize(value.tolist())
             except Exception:
                 pass
 
@@ -377,10 +378,35 @@ Write ONLY the final natural-language answer.
                 bool,
             ),
         ) or value is None:
-
             return value
 
         return str(value)
+
+    # ==========================================================
+    # RESPONSE QUALITY
+    # ==========================================================
+
+    @staticmethod
+    def _is_usable_response(response: str) -> bool:
+        if not response:
+            return False
+
+        cleaned = response.strip()
+
+        if len(cleaned) < 3:
+            return False
+
+        blocked = {
+            "i cannot answer",
+            "i can't answer",
+            "unable to answer",
+            "no answer",
+        }
+
+        if cleaned.lower() in blocked:
+            return False
+
+        return True
 
     # ==========================================================
     # DETERMINISTIC FALLBACK
@@ -393,10 +419,9 @@ Write ONLY the final natural-language answer.
         insights: list[dict] | None = None,
     ) -> str:
         """
-        Produce a useful deterministic answer when
-        the LLM is unavailable.
+        Deterministic fallback.
 
-        This fallback uses only explicit execution results.
+        Uses ONLY verified execution results and insights.
         """
 
         results = execution_results.get(
@@ -413,107 +438,103 @@ Write ONLY the final natural-language answer.
         successful_results = []
 
         for item in results:
-
             if not isinstance(item, dict):
                 continue
 
             if item.get("status") != "success":
                 continue
 
-            result = item.get(
-                "result",
-                {},
-            )
+            result = item.get("result", {})
 
             if isinstance(result, dict):
                 successful_results.append(result)
 
         if not successful_results:
-
             return (
                 "The analysis did not produce enough "
                 "successful results to answer the question."
             )
 
-        sections = []
+        sections: List[str] = []
 
         # ------------------------------------------------------
-        # Verified business insights
+        # Verified insights
         # ------------------------------------------------------
 
-        if isinstance(insights, list):
-
-            for insight in insights:
-
-                if not isinstance(insight, dict):
-                    continue
-
-                statement = insight.get(
-                    "statement"
-                )
-
-                if not statement:
-                    statement = insight.get(
-                        "message"
-                    )
-
-                if not statement:
-                    statement = insight.get(
-                        "insight"
-                    )
-
-                if statement:
-                    sections.append(
-                        str(statement)
-                    )
+        self._append_verified_insights(
+            sections,
+            insights or [],
+        )
 
         # ------------------------------------------------------
-        # Revenue calculation
+        # Revenue
         # ------------------------------------------------------
 
         for result in successful_results:
+            if result.get("operation") != "calculate_revenue":
+                continue
 
-            operation = result.get(
-                "operation"
+            total_revenue = result.get("total_revenue")
+            rows_calculated = result.get("rows_calculated")
+
+            if total_revenue is None:
+                continue
+
+            message = (
+                f"Total calculated revenue is "
+                f"{self._format_number(total_revenue)}"
             )
 
-            if operation == "calculate_revenue":
-
-                total_revenue = result.get(
-                    "total_revenue"
+            if rows_calculated is not None:
+                message += (
+                    f" across {rows_calculated} valid rows."
                 )
+            else:
+                message += "."
 
-                rows_calculated = result.get(
-                    "rows_calculated"
-                )
-
-                if total_revenue is not None:
-
-                    message = (
-                        f"Total calculated revenue is "
-                        f"{self._format_number(total_revenue)}"
-                    )
-
-                    if rows_calculated is not None:
-
-                        message += (
-                            f" across "
-                            f"{rows_calculated} valid rows."
-                        )
-
-                    sections.append(
-                        message
-                    )
+            self._append_unique(sections, message)
 
         # ------------------------------------------------------
-        # GroupBy results
+        # Ranking
         # ------------------------------------------------------
 
         for result in successful_results:
+            if result.get("operation") != "rank_by_value":
+                continue
 
-            operation = result.get(
-                "operation"
+            rows = result.get("results", [])
+
+            if not isinstance(rows, list) or not rows:
+                continue
+
+            valid_rows = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("group") is not None
+                and row.get("value") is not None
+            ]
+
+            if not valid_rows:
+                continue
+
+            top = valid_rows[0]
+
+            message = (
+                f"{top['group']} ranks highest with "
+                f"{self._format_number(top['value'])}."
             )
+
+            self._append_unique(sections, message)
+
+            break
+
+        # ------------------------------------------------------
+        # GroupBy
+        # ------------------------------------------------------
+
+        for result in successful_results:
+            operation = result.get("operation")
 
             if operation not in {
                 "groupby_aggregate",
@@ -521,15 +542,11 @@ Write ONLY the final natural-language answer.
             }:
                 continue
 
-            rows = result.get(
-                "results"
-            )
-
+            rows = result.get("results")
             group_column = result.get(
                 "group_column",
                 "category",
             )
-
             value_column = result.get(
                 "value_column",
                 "value",
@@ -547,38 +564,28 @@ Write ONLY the final natural-language answer.
             if not valid_rows:
                 continue
 
-            breakdown_parts = []
+            breakdown = []
 
             for row in valid_rows:
+                group_value = row.get(group_column)
+                value = row.get(value_column)
 
-                group_value = row.get(
-                    group_column
-                )
-
-                value = row.get(
-                    value_column
-                )
-
-                if (
-                    group_value is None
-                    or value is None
-                ):
+                if group_value is None or value is None:
                     continue
 
-                breakdown_parts.append(
+                breakdown.append(
                     f"{group_value}: "
                     f"{self._format_number(value)}"
                 )
 
-            if breakdown_parts:
-
-                sections.append(
-                    f"{value_column} by "
-                    f"{group_column}: "
-                    + "; ".join(
-                        breakdown_parts
-                    )
-                    + "."
+            if breakdown:
+                self._append_unique(
+                    sections,
+                    (
+                        f"{value_column} by {group_column}: "
+                        + "; ".join(breakdown)
+                        + "."
+                    ),
                 )
 
         # ------------------------------------------------------
@@ -586,38 +593,80 @@ Write ONLY the final natural-language answer.
         # ------------------------------------------------------
 
         for result in successful_results:
-
-            if result.get(
-                "operation"
-            ) != "find_max":
+            if result.get("operation") != "find_max":
                 continue
 
-            group = result.get(
-                "group"
-            )
-
-            value = result.get(
-                "value"
-            )
+            group = result.get("group")
+            value = result.get("value")
 
             if group is None or value is None:
                 continue
 
-            sections.append(
-                f"The highest value is "
-                f"{self._format_number(value)} "
-                f"for {group}."
+            self._append_unique(
+                sections,
+                (
+                    f"The highest value is "
+                    f"{self._format_number(value)} "
+                    f"for {group}."
+                ),
             )
 
         # ------------------------------------------------------
-        # Chart
+        # Trend
         # ------------------------------------------------------
 
         for result in successful_results:
+            if result.get("operation") != "trend_analysis":
+                continue
 
-            operation = result.get(
-                "operation"
+            rows = result.get("results", [])
+
+            if not isinstance(rows, list) or not rows:
+                continue
+
+            valid_rows = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("period") is not None
+                and row.get("value") is not None
+            ]
+
+            if not valid_rows:
+                continue
+
+            highest = max(
+                valid_rows,
+                key=lambda row: float(row["value"]),
             )
+
+            lowest = min(
+                valid_rows,
+                key=lambda row: float(row["value"]),
+            )
+
+            trend_message = (
+                f"Highest period: {highest['period']} "
+                f"({self._format_number(highest['value'])}). "
+            )
+
+            if len(valid_rows) > 1:
+                trend_message += (
+                    f"Lowest period: {lowest['period']} "
+                    f"({self._format_number(lowest['value'])})."
+                )
+
+            self._append_unique(
+                sections,
+                trend_message,
+            )
+
+        # ------------------------------------------------------
+        # Charts
+        # ------------------------------------------------------
+
+        for result in successful_results:
+            operation = result.get("operation")
 
             if operation not in {
                 "generate_bar_chart",
@@ -625,75 +674,132 @@ Write ONLY the final natural-language answer.
             }:
                 continue
 
-            output_path = result.get(
-                "output_path"
+            output_path = result.get("output_path")
+
+            if not output_path:
+                continue
+
+            chart_type = result.get(
+                "chart_type",
+                "chart",
             )
 
-            if output_path:
-
-                chart_type = result.get(
-                    "chart_type",
-                    "chart",
-                )
-
-                sections.append(
+            self._append_unique(
+                sections,
+                (
                     f"A {chart_type} chart was generated "
                     f"and saved to {output_path}."
-                )
-
-        # ------------------------------------------------------
-        # Final fallback
-        # ------------------------------------------------------
+                ),
+            )
 
         if not sections:
-
             return (
                 "The analysis completed successfully, "
                 "but the available results do not contain "
                 "enough information for a concise summary."
             )
 
-        return "\n\n".join(
-            sections
-        )
+        return "\n\n".join(sections)
+
+    # ==========================================================
+    # INSIGHT HELPERS
+    # ==========================================================
+
+    @staticmethod
+    def _append_verified_insights(
+        sections: List[str],
+        insights: list[dict],
+    ) -> None:
+        """
+        Add verified insight messages in priority order.
+
+        Existing insight dictionaries use `message`; older
+        structures may use `statement` or `insight`.
+        """
+
+        priority = {
+            "maximum": 10,
+            "highest_performer": 20,
+            "lowest_performer": 30,
+            "performance_gap": 40,
+            "trend_highest_period": 50,
+            "trend_lowest_period": 60,
+            "trend_overall_change": 70,
+            "trend_direction": 80,
+            "group_highest": 90,
+            "group_lowest": 100,
+            "dominant_category": 110,
+            "average_percentage_change": 120,
+            "percentage_change_range": 130,
+            "mean_median_relationship": 140,
+        }
+
+        usable = []
+
+        for insight in insights:
+            if not isinstance(insight, dict):
+                continue
+
+            message = (
+                insight.get("message")
+                or insight.get("statement")
+                or insight.get("insight")
+            )
+
+            if not message:
+                continue
+
+            insight_type = str(
+                insight.get("type", "")
+            )
+
+            usable.append(
+                (
+                    priority.get(
+                        insight_type,
+                        999,
+                    ),
+                    str(message),
+                )
+            )
+
+        usable.sort(key=lambda item: item[0])
+
+        for _, message in usable:
+            if message not in sections:
+                sections.append(message)
+
+    @staticmethod
+    def _append_unique(
+        sections: List[str],
+        message: str,
+    ) -> None:
+        if message and message not in sections:
+            sections.append(message)
 
     # ==========================================================
     # NUMBER FORMATTING
     # ==========================================================
 
     @staticmethod
-    def _format_number(
-        value: Any,
-    ) -> str:
+    def _format_number(value: Any) -> str:
         """
-        Format numeric values without inventing
-        currency information.
+        Format numbers without assuming currency.
         """
 
-        if isinstance(
-            value,
-            bool,
-        ):
+        if isinstance(value, bool):
             return str(value)
 
-        if isinstance(
-            value,
-            int,
-        ):
+        if isinstance(value, int):
             return f"{value:,}"
 
-        if isinstance(
-            value,
-            float,
-        ):
-
+        if isinstance(value, float):
             if value.is_integer():
                 return f"{int(value):,}"
 
             return f"{value:,.2f}"
 
         try:
-
             numeric_value = float(value)
 
             if numeric_value.is_integer():
@@ -705,5 +811,4 @@ Write ONLY the final natural-language answer.
             TypeError,
             ValueError,
         ):
-
             return str(value)
