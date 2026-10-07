@@ -3,11 +3,13 @@ from typing import Any
 
 class ContinuationAdapter:
     """
-    Converts ResultInterpreter next_operations into the same
+    Converts ResultInterpreter continuation operations into the
     analysis-plan structure expected by the existing pipeline.
 
-    Also repairs missing parameters for common autonomous
-    continuation operations using the previous execution results.
+    Also repairs missing parameters deterministically using:
+    1. Previous execution results
+    2. Dataset schema
+    3. Known business semantics
     """
 
     def adapt(
@@ -19,9 +21,7 @@ class ContinuationAdapter:
     ) -> dict[str, Any]:
 
         if not isinstance(next_operations, list):
-            raise ValueError(
-                "next_operations must be a list."
-            )
+            raise ValueError("next_operations must be a list.")
 
         execution_results = execution_results or {}
         context = context or {}
@@ -39,14 +39,9 @@ class ContinuationAdapter:
             if not operation_name:
                 continue
 
-            operation_name = str(
-                operation_name
-            ).strip().lower()
+            operation_name = str(operation_name).strip().lower()
 
-            parameters = operation.get(
-                "parameters",
-                {},
-            )
+            parameters = operation.get("parameters", {})
 
             if not isinstance(parameters, dict):
                 parameters = {}
@@ -62,34 +57,28 @@ class ContinuationAdapter:
 
             step = {
                 "step": step_number,
-                "tool": self._infer_tool(
-                    operation_name
-                ),
+                "tool": self._infer_tool(operation_name),
                 "operation": operation_name,
                 "parameters": parameters,
                 "description": (
-                    operation.get(
-                        "description"
-                    )
-                    or (
-                        "Autonomous continuation: "
-                        f"{operation_name}"
-                    )
+                    operation.get("description")
+                    or f"Autonomous continuation: {operation_name}"
                 ),
             }
 
             analysis_plan.append(step)
-
             step_number += 1
 
         if not analysis_plan:
-            raise ValueError(
-                "No valid continuation operations were provided."
-            )
+            raise ValueError("No valid continuation operations were provided.")
 
         return {
             "analysis_plan": analysis_plan
         }
+
+    # ============================================================
+    # PARAMETER REPAIR
+    # ============================================================
 
     def _repair_parameters(
         self,
@@ -98,28 +87,420 @@ class ContinuationAdapter:
         execution_results: dict[str, Any],
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        """
-        Deterministically repair missing parameters.
 
-        We only infer parameters when they can be derived from
-        actual execution results or dataset schema.
-        """
+        normalized = self._normalize_operation(operation_name)
 
-        if operation_name == "generate_bar_chart":
+        if normalized == "generate_bar_chart":
             return self._repair_bar_chart_parameters(
-                parameters=parameters,
-                execution_results=execution_results,
-                context=context,
+                parameters,
+                execution_results,
+                context,
             )
 
-        if operation_name == "generate_line_chart":
+        if normalized == "generate_line_chart":
             return self._repair_line_chart_parameters(
-                parameters=parameters,
-                execution_results=execution_results,
-                context=context,
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized in {
+            "groupby_aggregation",
+            "groupby_aggregate",
+        }:
+            return self._repair_groupby_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "trend_analysis":
+            return self._repair_trend_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "find_max":
+            return self._repair_value_operation_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "calculate_statistics":
+            return self._repair_value_operation_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "rank_by_value":
+            return self._repair_value_operation_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "categorical_analysis":
+            return self._repair_categorical_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "calculate_percentage_change":
+            return self._repair_percentage_change_parameters(
+                parameters,
+                execution_results,
+                context,
+            )
+
+        if normalized == "compare_columns":
+            return self._repair_compare_parameters(
+                parameters,
+                execution_results,
+                context,
             )
 
         return parameters
+
+    # ============================================================
+    # GROUPBY
+    # ============================================================
+
+    def _repair_groupby_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        group_column = (
+            repaired.get("group_column")
+            or repaired.get("group_by")
+            or repaired.get("category_column")
+        )
+
+        value_column = (
+            repaired.get("value_column")
+            or repaired.get("metric_column")
+            or repaired.get("column")
+        )
+
+        aggregation = (
+            repaired.get("aggregation")
+            or repaired.get("agg")
+            or "sum"
+        )
+
+        # First use previous groupby metadata
+        if not group_column or not value_column:
+
+            previous = self._latest_result(
+                execution_results,
+                {
+                    "groupby_aggregate",
+                    "groupby_aggregation",
+                    "group_by",
+                },
+            )
+
+            metadata = self._result_metadata(previous)
+
+            if not group_column:
+                group_column = (
+                    metadata.get("group_column")
+                    or metadata.get("group")
+                    or metadata.get("x_column")
+                )
+
+            if not value_column:
+                value_column = (
+                    metadata.get("value_column")
+                    or metadata.get("value")
+                    or metadata.get("y_column")
+                )
+
+        columns = self._schema_columns(context)
+
+        # Business-safe defaults for this project
+        if not group_column:
+            for candidate in [
+                "Region",
+                "Product Category",
+                "Sales Rep",
+                "Status",
+            ]:
+                if candidate in columns:
+                    group_column = candidate
+                    break
+
+        if not value_column:
+            value_column = self._best_numeric_column(
+                columns,
+                prefer_revenue=True,
+            )
+
+        if group_column:
+            repaired["group_column"] = group_column
+
+        if value_column:
+            repaired["value_column"] = value_column
+
+        repaired["aggregation"] = aggregation
+
+        return repaired
+
+    # ============================================================
+    # TREND
+    # ============================================================
+
+    def _repair_trend_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        date_column = (
+            repaired.get("date_column")
+            or repaired.get("x_column")
+            or repaired.get("column")
+        )
+
+        value_column = (
+            repaired.get("value_column")
+            or repaired.get("metric_column")
+            or repaired.get("y_column")
+        )
+
+        period = repaired.get("period") or "monthly"
+
+        columns = self._schema_columns(context)
+
+        previous = self._latest_result(
+            execution_results,
+            {
+                "trend_analysis",
+                "grouped_trend_analysis",
+            },
+        )
+
+        metadata = self._result_metadata(previous)
+
+        if not date_column:
+            date_column = (
+                metadata.get("date_column")
+                or metadata.get("x_column")
+                or metadata.get("time_column")
+            )
+
+        if not value_column:
+            value_column = (
+                metadata.get("value_column")
+                or metadata.get("y_column")
+                or metadata.get("metric_column")
+            )
+
+        if not date_column and "Date" in columns:
+            date_column = "Date"
+
+        if not value_column:
+            value_column = self._best_numeric_column(
+                columns,
+                prefer_revenue=True,
+            )
+
+        if date_column:
+            repaired["date_column"] = date_column
+
+        if value_column:
+            repaired["value_column"] = value_column
+
+        repaired["period"] = period
+
+        return repaired
+
+    # ============================================================
+    # VALUE OPERATIONS
+    # ============================================================
+
+    def _repair_value_operation_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        value_column = (
+            repaired.get("value_column")
+            or repaired.get("column")
+            or repaired.get("metric_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        if not value_column:
+            previous = self._latest_result(
+                execution_results,
+                {
+                    "find_max",
+                    "calculate_statistics",
+                    "rank_by_value",
+                },
+            )
+
+            metadata = self._result_metadata(previous)
+
+            value_column = (
+                metadata.get("value_column")
+                or metadata.get("column")
+                or metadata.get("metric_column")
+            )
+
+        if not value_column:
+            value_column = self._best_numeric_column(
+                columns,
+                prefer_revenue=True,
+            )
+
+        if value_column:
+            repaired["value_column"] = value_column
+
+        return repaired
+
+    # ============================================================
+    # CATEGORICAL
+    # ============================================================
+
+    def _repair_categorical_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        column = (
+            repaired.get("column")
+            or repaired.get("category_column")
+            or repaired.get("group_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        if not column:
+            for candidate in [
+                "Region",
+                "Product Category",
+                "Sales Rep",
+                "Status",
+            ]:
+                if candidate in columns:
+                    column = candidate
+                    break
+
+        if column:
+            repaired["column"] = column
+
+        return repaired
+
+    # ============================================================
+    # PERCENTAGE CHANGE
+    # ============================================================
+
+    def _repair_percentage_change_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        value_column = (
+            repaired.get("value_column")
+            or repaired.get("column")
+            or repaired.get("metric_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        if not value_column:
+            value_column = self._best_numeric_column(
+                columns,
+                prefer_revenue=True,
+            )
+
+        if value_column:
+            repaired["value_column"] = value_column
+
+        return repaired
+
+    # ============================================================
+    # COMPARE COLUMNS
+    # ============================================================
+
+    def _repair_compare_parameters(
+        self,
+        parameters: dict[str, Any],
+        execution_results: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+
+        repaired = dict(parameters)
+
+        column_a = (
+            repaired.get("column_a")
+            or repaired.get("first_column")
+            or repaired.get("left_column")
+        )
+
+        column_b = (
+            repaired.get("column_b")
+            or repaired.get("second_column")
+            or repaired.get("right_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        numeric_columns = [
+            c for c in columns
+            if c not in {
+                "Order ID",
+                "Date",
+                "Sales Rep",
+                "Region",
+                "Product Category",
+                "Status",
+            }
+        ]
+
+        if not column_a and numeric_columns:
+            column_a = numeric_columns[0]
+
+        if not column_b and len(numeric_columns) > 1:
+            column_b = numeric_columns[1]
+
+        if column_a:
+            repaired["column_a"] = column_a
+
+        if column_b:
+            repaired["column_b"] = column_b
+
+        return repaired
+
+    # ============================================================
+    # BAR CHART
+    # ============================================================
 
     def _repair_bar_chart_parameters(
         self,
@@ -130,257 +511,60 @@ class ContinuationAdapter:
 
         repaired = dict(parameters)
 
-        results = execution_results.get(
-            "results",
-            [],
-        )
-
-        if not isinstance(results, list):
-            results = []
-
-        # --------------------------------------------------
-        # 1. Find the latest groupby result
-        # --------------------------------------------------
-
-        groupby_result = None
-
-        for result in reversed(results):
-
-            if not isinstance(result, dict):
-                continue
-
-            operation = str(
-                result.get("operation", "")
-            ).strip().lower()
-
-            if operation in {
+        previous = self._latest_result(
+            execution_results,
+            {
                 "groupby_aggregate",
                 "groupby_aggregation",
                 "group_by",
-            }:
-                groupby_result = result
-                break
-
-        if groupby_result:
-
-            result_data = groupby_result.get(
-                "result",
-                {},
-            )
-
-            if isinstance(result_data, dict):
-
-                group_column = (
-                    result_data.get("group_column")
-                    or result_data.get("group")
-                    or result_data.get("x_column")
-                )
-
-                value_column = (
-                    result_data.get("value_column")
-                    or result_data.get("value")
-                    or result_data.get("y_column")
-                )
-
-                if (
-                    not repaired.get("x_column")
-                    and group_column
-                ):
-                    repaired["x_column"] = str(
-                        group_column
-                    )
-
-                if (
-                    not repaired.get("y_column")
-                    and value_column
-                ):
-                    repaired["y_column"] = str(
-                        value_column
-                    )
-
-                if (
-                    not repaired.get("title")
-                    and group_column
-                    and value_column
-                ):
-                    repaired["title"] = (
-                        f"{value_column} by "
-                        f"{group_column}"
-                    )
-
-        # --------------------------------------------------
-        # 2. Inspect nested result data when metadata
-        #    is not available
-        # --------------------------------------------------
-
-        if (
-            not repaired.get("x_column")
-            or not repaired.get("y_column")
-        ):
-
-            for result in reversed(results):
-
-                if not isinstance(result, dict):
-                    continue
-
-                result_data = result.get(
-                    "result",
-                    {},
-                )
-
-                if not isinstance(
-                    result_data,
-                    dict,
-                ):
-                    continue
-
-                data = result_data.get(
-                    "data"
-                )
-
-                if not isinstance(
-                    data,
-                    list,
-                ) or not data:
-                    continue
-
-                first_row = data[0]
-
-                if not isinstance(
-                    first_row,
-                    dict,
-                ):
-                    continue
-
-                if (
-                    "x" in first_row
-                    and "y" in first_row
-                ):
-
-                    if not repaired.get(
-                        "x_column"
-                    ):
-                        repaired["x_column"] = (
-                            result_data.get(
-                                "x_column"
-                            )
-                            or "Region"
-                        )
-
-                    if not repaired.get(
-                        "y_column"
-                    ):
-                        repaired["y_column"] = (
-                            result_data.get(
-                                "y_column"
-                            )
-                            or "Total Revenue"
-                        )
-
-                    break
-
-        # --------------------------------------------------
-        # 3. Safe fallback from schema
-        # --------------------------------------------------
-
-        schema = context.get(
-            "schema",
-            {},
+            },
         )
 
-        if isinstance(schema, dict):
+        metadata = self._result_metadata(previous)
 
-            columns = schema.get(
-                "columns",
-                [],
-            )
+        x_column = (
+            repaired.get("x_column")
+            or metadata.get("group_column")
+            or metadata.get("group")
+            or metadata.get("x_column")
+        )
 
-            if isinstance(
+        y_column = (
+            repaired.get("y_column")
+            or metadata.get("value_column")
+            or metadata.get("value")
+            or metadata.get("y_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        if not x_column and "Region" in columns:
+            x_column = "Region"
+
+        if not y_column:
+            y_column = self._best_numeric_column(
                 columns,
-                list,
-            ):
-
-                column_names = []
-
-                for column in columns:
-
-                    if isinstance(
-                        column,
-                        dict,
-                    ):
-                        name = column.get(
-                            "name"
-                        )
-                    else:
-                        name = column
-
-                    if name:
-                        column_names.append(
-                            str(name)
-                        )
-
-                if (
-                    not repaired.get(
-                        "x_column"
-                    )
-                    and "Region"
-                    in column_names
-                ):
-                    repaired["x_column"] = (
-                        "Region"
-                    )
-
-                if (
-                    not repaired.get(
-                        "y_column"
-                    )
-                    and "Total Revenue"
-                    in column_names
-                ):
-                    repaired["y_column"] = (
-                        "Total Revenue"
-                    )
-
-        # --------------------------------------------------
-        # 4. Known semantic fallback:
-        #    Revenue is commonly represented as
-        #    Total Revenue in our execution layer.
-        # --------------------------------------------------
-
-        if (
-            not repaired.get("y_column")
-            and self._has_revenue_signal(
-                execution_results
-            )
-        ):
-            repaired["y_column"] = (
-                "Total Revenue"
+                prefer_revenue=True,
             )
 
-        if (
-            not repaired.get("x_column")
-            and self._has_region_signal(
-                execution_results,
-                context,
-            )
-        ):
-            repaired["x_column"] = "Region"
+        if x_column:
+            repaired["x_column"] = x_column
 
-        # --------------------------------------------------
-        # 5. Final chart defaults
-        # --------------------------------------------------
+        if y_column:
+            repaired["y_column"] = y_column
 
         if (
             not repaired.get("title")
-            and repaired.get("x_column")
-            and repaired.get("y_column")
+            and x_column
+            and y_column
         ):
-            repaired["title"] = (
-                f"{repaired['y_column']} by "
-                f"{repaired['x_column']}"
-            )
+            repaired["title"] = f"{y_column} by {x_column}"
 
         return repaired
+
+    # ============================================================
+    # LINE CHART
+    # ============================================================
 
     def _repair_line_chart_parameters(
         self,
@@ -391,105 +575,195 @@ class ContinuationAdapter:
 
         repaired = dict(parameters)
 
-        schema = context.get(
-            "schema",
-            {},
+        previous = self._latest_result(
+            execution_results,
+            {
+                "trend_analysis",
+                "grouped_trend_analysis",
+            },
         )
 
-        columns = []
+        metadata = self._result_metadata(previous)
 
-        if isinstance(schema, dict):
-            schema_columns = schema.get(
-                "columns",
-                [],
+        x_column = (
+            repaired.get("x_column")
+            or metadata.get("date_column")
+            or metadata.get("x_column")
+        )
+
+        y_column = (
+            repaired.get("y_column")
+            or metadata.get("value_column")
+            or metadata.get("y_column")
+        )
+
+        columns = self._schema_columns(context)
+
+        if not x_column and "Date" in columns:
+            x_column = "Date"
+
+        if not y_column:
+            y_column = self._best_numeric_column(
+                columns,
+                prefer_revenue=True,
             )
 
-            if isinstance(
-                schema_columns,
-                list,
-            ):
-                for column in schema_columns:
+        if x_column:
+            repaired["x_column"] = x_column
 
-                    if isinstance(
-                        column,
-                        dict,
-                    ):
-                        name = column.get(
-                            "name"
-                        )
-                    else:
-                        name = column
-
-                    if name:
-                        columns.append(
-                            str(name)
-                        )
-
-        if (
-            not repaired.get("x_column")
-            and "Date" in columns
-        ):
-            repaired["x_column"] = "Date"
-
-        if (
-            not repaired.get("y_column")
-            and "Total Revenue" in columns
-        ):
-            repaired["y_column"] = (
-                "Total Revenue"
-            )
+        if y_column:
+            repaired["y_column"] = y_column
 
         if (
             not repaired.get("title")
-            and repaired.get("x_column")
-            and repaired.get("y_column")
+            and x_column
+            and y_column
         ):
-            repaired["title"] = (
-                f"{repaired['y_column']} over "
-                f"{repaired['x_column']}"
-            )
+            repaired["title"] = f"{y_column} over {x_column}"
 
         return repaired
 
-    def _has_revenue_signal(
+    # ============================================================
+    # HELPERS
+    # ============================================================
+
+    def _schema_columns(
         self,
-        execution_results: dict[str, Any],
-    ) -> bool:
-
-        serialized = str(
-            execution_results
-        ).lower()
-
-        return (
-            "revenue" in serialized
-            or "total_revenue" in serialized
-        )
-
-    def _has_region_signal(
-        self,
-        execution_results: dict[str, Any],
         context: dict[str, Any],
-    ) -> bool:
+    ) -> list[str]:
 
-        if "Region" in str(
-            context.get("schema", {})
-        ):
-            return True
+        schema = context.get("schema", {})
 
-        serialized = str(
-            execution_results
-        )
+        if not isinstance(schema, dict):
+            return []
 
-        return "Region" in serialized
+        raw_columns = schema.get("columns", [])
+
+        if not isinstance(raw_columns, list):
+            return []
+
+        columns = []
+
+        for column in raw_columns:
+
+            if isinstance(column, dict):
+                name = column.get("name")
+            else:
+                name = column
+
+            if name:
+                columns.append(str(name))
+
+        return columns
+
+    def _best_numeric_column(
+        self,
+        columns: list[str],
+        prefer_revenue: bool = False,
+    ) -> str | None:
+
+        if prefer_revenue:
+
+            for candidate in [
+                "Revenue",
+                "Total Revenue",
+            ]:
+                if candidate in columns:
+                    return candidate
+
+        for candidate in [
+            "Units Sold",
+            "Unit Price",
+            "Customer Satisfaction",
+        ]:
+            if candidate in columns:
+                return candidate
+
+        # Avoid selecting obvious categorical/date fields.
+        excluded = {
+            "Order ID",
+            "Date",
+            "Sales Rep",
+            "Region",
+            "Product Category",
+            "Status",
+        }
+
+        for column in columns:
+            if column not in excluded:
+                return column
+
+        return None
+
+    def _latest_result(
+        self,
+        execution_results: dict[str, Any],
+        operations: set[str],
+    ) -> dict[str, Any] | None:
+
+        results = execution_results.get("results", [])
+
+        if not isinstance(results, list):
+            return None
+
+        for result in reversed(results):
+
+            if not isinstance(result, dict):
+                continue
+
+            operation = str(
+                result.get("operation", "")
+            ).strip().lower()
+
+            if operation in operations:
+                return result
+
+        return None
+
+    def _result_metadata(
+        self,
+        result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+
+        if not isinstance(result, dict):
+            return {}
+
+        result_data = result.get("result", {})
+
+        if not isinstance(result_data, dict):
+            return {}
+
+        return result_data
+
+    def _normalize_operation(
+        self,
+        operation: str,
+    ) -> str:
+
+        normalized = str(operation).strip().lower()
+
+        aliases = {
+            "group_by": "groupby_aggregation",
+            "groupby": "groupby_aggregation",
+            "groupby_aggregate": "groupby_aggregation",
+            "groupby_aggregation": "groupby_aggregation",
+            "line_chart": "generate_line_chart",
+            "bar_chart": "generate_bar_chart",
+            "statistics": "calculate_statistics",
+            "statistical_analysis": "calculate_statistics",
+            "percentage_change": "calculate_percentage_change",
+            "percentage": "calculate_percentage_change",
+            "comparison": "compare_columns",
+        }
+
+        return aliases.get(normalized, normalized)
 
     def _infer_tool(
         self,
         operation: str,
     ) -> str:
 
-        normalized = str(
-            operation
-        ).strip().lower()
+        normalized = self._normalize_operation(operation)
 
         if normalized in {
             "generate_bar_chart",
@@ -497,7 +771,10 @@ class ContinuationAdapter:
         }:
             return "chart_generator"
 
-        if normalized == "time_analysis":
+        if normalized in {
+            "trend_analysis",
+            "grouped_trend_analysis",
+        }:
             return "time_analysis"
 
         return "pandas_analysis"

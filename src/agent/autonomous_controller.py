@@ -54,6 +54,7 @@ class AutonomousController:
         user_query: str,
         execution_result: dict[str, Any],
         context: dict[str, Any] | None = None,
+        execution_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Interpret the latest execution result and decide
@@ -63,6 +64,7 @@ class AutonomousController:
         decision = self.interpreter.interpret(
             user_query=user_query,
             execution_results=execution_result,
+            execution_history=execution_history,
         )
 
         decision_type = decision.get("decision")
@@ -180,6 +182,8 @@ class AutonomousController:
             start_step=self._next_step_number(
                 execution_result
             ),
+            execution_results=execution_result,
+            context=context,
         )
 
         self.loop.next_iteration()
