@@ -387,7 +387,23 @@ def _resolve_value_column(
 
     numeric_columns = []
 
+    # Exclude date/time columns and internal helper columns
+    # from automatic metric selection.
+    date_column = _find_date_column(working_df)
+
+    excluded_columns = {
+        column
+        for column in working_df.columns
+        if str(column).startswith("_analysis_")
+    }
+
+    if date_column is not None:
+        excluded_columns.add(date_column)
+
     for column in working_df.columns:
+
+        if column in excluded_columns:
+            continue
 
         numeric = pd.to_numeric(
             working_df[column],
