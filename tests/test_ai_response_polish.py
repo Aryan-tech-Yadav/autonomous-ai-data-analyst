@@ -194,3 +194,93 @@ def test_interpreter_normalizes_chart_operation_alias():
         "x_column": "Region",
         "y_column": "Revenue",
     }
+
+
+def test_verified_insights_are_prioritized_and_duplicates_removed():
+    generator = ResponseGenerator()
+    sections = []
+
+    generator._append_verified_insights(
+        sections,
+        [
+            {
+                "type": "dominant_category",
+                "message": "East represents 40% of records.",
+            },
+            {
+                "type": "highest_performer",
+                "message": "West has the highest verified revenue.",
+            },
+            {
+                "type": "highest_performer",
+                "message": "West has the highest verified revenue.",
+            },
+        ],
+    )
+
+    assert sections == [
+        "West has the highest verified revenue.",
+        "East represents 40% of records.",
+    ]
+
+
+def test_lowest_performer_insight_is_available_for_lowest_query():
+    generator = ResponseGenerator()
+    sections = []
+
+    generator._append_verified_insights(
+        sections,
+        [
+            {
+                "type": "highest_performer",
+                "message": "East has the highest revenue.",
+            },
+            {
+                "type": "lowest_performer",
+                "message": "South has the lowest revenue.",
+            },
+        ],
+    )
+
+    # Existing helper sorts by priority; query-specific filtering
+    # will be introduced separately after establishing this baseline.
+    assert "East has the highest revenue." in sections
+    assert "South has the lowest revenue." in sections
+
+
+def test_query_specific_insight_filtering_contract():
+    generator = ResponseGenerator()
+
+    insights = [
+        {
+            "type": "highest_performer",
+            "message": "East has the highest revenue.",
+        },
+        {
+            "type": "lowest_performer",
+            "message": "South has the lowest revenue.",
+        },
+    ]
+
+    lowest_response = generator._deterministic_fallback(
+        user_query="Which region has the lowest revenue?",
+        execution_results={
+            "results": [
+                {
+                    "operation": "rank_by_value",
+                    "status": "success",
+                    "result": {
+                        "operation": "rank_by_value",
+                        "results": [
+                            {"group": "East", "value": 100},
+                            {"group": "South", "value": 20},
+                        ],
+                    },
+                }
+            ]
+        },
+        insights=insights,
+    )
+
+    assert "South" in lowest_response
+    assert "East has the highest revenue." not in lowest_response

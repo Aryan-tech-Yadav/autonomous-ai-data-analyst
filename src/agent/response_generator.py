@@ -461,9 +461,14 @@ CURRENT QUESTION:
         # Verified insights
         # ------------------------------------------------------
 
+        relevant_insights = self._filter_insights_for_query(
+            user_query,
+            insights or [],
+        )
+
         self._append_verified_insights(
             sections,
-            insights or [],
+            relevant_insights,
         )
 
         # ------------------------------------------------------
@@ -518,11 +523,45 @@ CURRENT QUESTION:
             if not valid_rows:
                 continue
 
-            top = valid_rows[0]
+            query = str(user_query).lower()
+
+            asks_lowest = any(
+                term in query
+                for term in (
+                    "lowest", "least", "minimum", "smallest",
+                    "worst", "bottom", "sabse kam", "sabse niche",
+                    "sabse neeche",
+                )
+            )
+
+            asks_highest = any(
+                term in query
+                for term in (
+                    "highest", "maximum", "largest", "best",
+                    "top", "greatest", "sabse jyada",
+                    "sabse zyada", "sabse adhik",
+                )
+            )
+
+            if asks_lowest and not asks_highest:
+                selected = min(
+                    valid_rows,
+                    key=lambda row: float(row["value"]),
+                )
+                label = "ranks lowest"
+            elif asks_highest and not asks_lowest:
+                selected = max(
+                    valid_rows,
+                    key=lambda row: float(row["value"]),
+                )
+                label = "ranks highest"
+            else:
+                selected = valid_rows[0]
+                label = "ranks highest"
 
             message = (
-                f"{top['group']} ranks highest with "
-                f"{self._format_number(top['value'])}."
+                f"{selected['group']} {label} with "
+                f"{self._format_number(selected['value'])}."
             )
 
             self._append_unique(sections, message)
@@ -704,6 +743,50 @@ CURRENT QUESTION:
     # ==========================================================
     # INSIGHT HELPERS
     # ==========================================================
+
+    @staticmethod
+    def _filter_insights_for_query(
+        user_query: str,
+        insights: list[dict],
+    ) -> list[dict]:
+        """Prioritize insights that directly match the user's question."""
+        query = str(user_query).lower()
+
+        asks_lowest = any(
+            term in query
+            for term in (
+                "lowest", "least", "minimum", "smallest",
+                "worst", "bottom", "sabse kam", "sabse niche",
+                "sabse neeche",
+            )
+        )
+        asks_highest = any(
+            term in query
+            for term in (
+                "highest", "maximum", "largest", "best",
+                "top", "greatest", "sabse jyada", "sabse zyada",
+                "sabse adhik",
+            )
+        )
+
+        # If both or neither are requested, preserve the overview.
+        if asks_lowest == asks_highest:
+            return insights
+
+        excluded_types = (
+            {"highest_performer", "group_highest", "maximum"}
+            if asks_lowest
+            else {"lowest_performer", "group_lowest"}
+        )
+
+        return [
+            insight
+            for insight in insights
+            if not (
+                isinstance(insight, dict)
+                and insight.get("type") in excluded_types
+            )
+        ]
 
     @staticmethod
     def _append_verified_insights(
