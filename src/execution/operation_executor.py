@@ -164,16 +164,52 @@ class OperationExecutor:
         parameters: Dict[str, Any],
     ) -> tuple[pd.DataFrame, Dict[str, Any]]:
         """
-        Generate a line chart from the latest successful
-        trend_analysis result.
+        Generate a line chart from the trend result matching
+        the requested chart y_column.
         """
 
-        trend_result = self._get_latest_trend_result()
+        requested_column = str(
+            parameters.get("y_column")
+            or parameters.get("value_column")
+            or parameters.get("metric_column")
+            or ""
+        ).strip()
+
+        trend_result = None
+
+        # Prefer the trend result matching this chart's metric.
+        for item in reversed(self.results):
+            if (
+                item.get("operation") != "trend_analysis"
+                or item.get("status") != "success"
+            ):
+                continue
+
+            candidate = item.get("result")
+            if not isinstance(candidate, dict):
+                continue
+
+            candidate_column = str(
+                candidate.get("value_column") or ""
+            ).strip()
+
+            if (
+                requested_column
+                and candidate_column.casefold()
+                == requested_column.casefold()
+            ):
+                trend_result = candidate
+                break
+
+        # Preserve the old fallback for plans that omit y_column.
+        if trend_result is None and not requested_column:
+            trend_result = self._get_latest_trend_result()
 
         if trend_result is None:
             raise ValueError(
-                "generate_line_chart requires a successful "
-                "trend_analysis result before chart creation."
+                "No successful trend_analysis result matches "
+                f"chart column '{requested_column}'. Run trend_analysis "
+                "for that column before generating its chart."
             )
 
         chart_df = self._trend_result_to_chart_dataframe(
@@ -183,25 +219,14 @@ class OperationExecutor:
         chart_parameters = {
             "x_column": "Period",
             "y_column": "Value",
-            "title": parameters.get(
-                "title",
-                "Trend",
-            ),
+            "title": parameters.get("title", "Trend"),
             "aggregation": "sum",
             "sort_x": True,
-            "output_path": parameters.get(
-                "output_path"
-            ),
+            "output_path": parameters.get("output_path"),
         }
 
-        tool = get_operation(
-            "generate_line_chart"
-        )
-
-        result = tool(
-            df=chart_df,
-            **chart_parameters,
-        )
+        tool = get_operation("generate_line_chart")
+        result = tool(df=chart_df, **chart_parameters)
 
         return chart_df, result
 
@@ -658,6 +683,113 @@ class OperationExecutor:
                         df=working_df,
                         **trend_parameters,
                     )
+
+                # ==================================================
+                # FIND MAX FROM TREND RESULT
+                # ==================================================
+
+                elif normalized_operation == "find_max":
+
+                    find_max_parameters = dict(parameters)
+
+                    requested_column = str(
+                        find_max_parameters.get("column")
+                        or find_max_parameters.get("value_column")
+                        or ""
+                    ).strip()
+
+                    if (
+                        "column" in find_max_parameters
+                        and "group_column" not in find_max_parameters
+                        and "value_column" not in find_max_parameters
+                    ):
+
+                        trend_result = None
+
+                        for item in reversed(self.results):
+                            if (
+                                item.get("operation") != "trend_analysis"
+                                or item.get("status") != "success"
+                            ):
+                                continue
+
+                            candidate = item.get("result")
+                            if not isinstance(candidate, dict):
+                                continue
+
+                            candidate_column = str(
+                                candidate.get("value_column") or ""
+                            ).strip()
+
+                            if (
+                                requested_column
+                                and candidate_column.casefold()
+                                == requested_column.casefold()
+                            ):
+                                trend_result = candidate
+                                break
+
+                        if trend_result is None:
+                            raise ValueError(
+                                "No successful trend_analysis result "
+                                f"matches requested column '{requested_column}'."
+                            )
+
+                        trend_df = self._trend_result_to_chart_dataframe(
+                            trend_result
+                        )
+
+                        if trend_df.empty:
+                            raise ValueError(
+                                "The matching trend result contains "
+                                "no valid values."
+                            )
+
+                        tool = get_operation("find_max")
+
+                        trend_max = tool(
+                            df=trend_df,
+                            group_column="Period",
+                            value_column="Value",
+                        )
+
+                        result = {
+                            "operation": "find_max",
+                            "group_column": trend_result.get(
+                                "date_column", "Period"
+                            ),
+                            "value_column": trend_result.get(
+                                "value_column", requested_column
+                            ),
+                            "group": trend_max.get("group"),
+                            "value": trend_max.get("value"),
+                        }
+
+                    else:
+
+                        value_column = find_max_parameters.get(
+                            "value_column"
+                        )
+
+                        if _is_derived_revenue_column(value_column):
+                            (
+                                working_df,
+                                resolved_value_column,
+                            ) = self._resolve_revenue_column(
+                                working_df,
+                                value_column,
+                            )
+
+                            find_max_parameters["value_column"] = (
+                                resolved_value_column
+                            )
+
+                        tool = get_operation("find_max")
+
+                        result = tool(
+                            df=working_df,
+                            **find_max_parameters,
+                        )
 
                 # ==================================================
                 # SHIFTED COLUMN
