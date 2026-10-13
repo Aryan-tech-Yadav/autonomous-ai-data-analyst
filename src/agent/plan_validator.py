@@ -22,6 +22,8 @@ OPERATION_ALIASES = {
     "group_by_aggregation": "groupby_aggregate",
     "group_by": "groupby_aggregate",
 
+    "statistics": "calculate_statistics",
+    "statistical_analysis": "calculate_statistics",
     "time_analysis": "trend_analysis",
     "monthly_trend": "trend_analysis",
     "revenue_trend": "trend_analysis",

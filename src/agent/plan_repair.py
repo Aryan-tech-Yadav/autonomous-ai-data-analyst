@@ -97,7 +97,7 @@ class PlanRepair:
             )
 
         return {
-            "repaired": bool(changes),
+            "repaired": repaired_plan != plan,
             "plan": repaired_plan,
             "changes": changes,
             "remaining_errors": validation_result.get(
@@ -716,7 +716,7 @@ class PlanRepair:
             "calculate_statistics",
         }:
 
-            self._repair_value_parameter(
+            self._repair_statistics_parameters(
                 parameters,
                 changes,
                 derived_columns,
@@ -913,6 +913,65 @@ class PlanRepair:
                 )
 
             break
+
+    def _repair_statistics_parameters(
+        self,
+        parameters: dict[str, Any],
+        changes: list[str],
+        derived_columns: set[str],
+    ) -> None:
+        # First try to repair a column explicitly provided by the plan.
+        for key in ("column", "value_column", "metric_column"):
+            if key not in parameters:
+                continue
+
+            original = parameters[key]
+            resolved = self._find_column(
+                original,
+                derived_columns,
+            )
+
+            if resolved:
+                parameters["column"] = resolved
+                if resolved != original or key != "column":
+                    changes.append(
+                        f"Repaired statistics column "
+                        f"'{original}' → '{resolved}'."
+                    )
+                return
+
+        # If the plan omitted the column, choose a schema column
+        # whose dtype or detected role indicates numeric data.
+        schema_columns = self.schema.get("columns", [])
+        for item in schema_columns:
+            if not isinstance(item, dict):
+                continue
+
+            name = item.get("name")
+            dtype = str(item.get("dtype", "")).lower()
+            role = str(item.get("role", "")).lower()
+
+            if not name:
+                continue
+
+            is_numeric = (
+                role in {"numeric", "numeric_discrete"}
+                or dtype.startswith(("int", "uint", "float"))
+            )
+
+            if is_numeric and name not in derived_columns:
+                parameters["column"] = str(name)
+                changes.append(
+                    f"Selected numeric column '{name}' "
+                    "for statistics because the plan omitted a column."
+                )
+                return
+
+        # Do not silently select a text or categorical column.
+        changes.append(
+            "Could not repair statistics: no suitable numeric "
+            "column was found in the schema."
+        )
 
     def _repair_category_parameter(
         self,
