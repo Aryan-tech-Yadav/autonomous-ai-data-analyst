@@ -857,6 +857,36 @@ def validate_plan(
 
             continue
 
+        # Detect missing required columns before adapter execution.
+        operation_key = _normalize(operation)
+        required_parameter_groups = {
+            "calculate_statistics": (("column", "value_column"),),
+            "categorical_analysis": (("column", "category_column", "categorical_column"),),
+            "groupby_aggregate": (
+                ("group_column", "group_by", "group_by_column", "category_column"),
+                ("value_column", "metric_column", "aggregation_column"),
+            ),
+            "find_max": (
+                ("group_column", "group_by", "group_by_column"),
+                ("value_column", "metric_column", "column"),
+            ),
+            "rank_by_value": (
+                ("group_column", "group_by", "group_by_column", "category_column"),
+                ("value_column", "metric_column", "aggregation_column"),
+            ),
+        }
+
+        for alternatives in required_parameter_groups.get(operation_key, ()):
+            if not any(
+                parameters.get(key) is not None
+                and str(parameters.get(key)).strip()
+                for key in alternatives
+            ):
+                errors.append(
+                    f"Step {index} operation '{operation}' is missing "
+                    f"a required column parameter: {', '.join(alternatives)}."
+                )
+
         # --------------------------------------------------
         # Shift / lag
         # --------------------------------------------------

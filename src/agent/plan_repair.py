@@ -694,6 +694,7 @@ class PlanRepair:
 
         elif operation in {
             "groupby_aggregation",
+            "groupby_aggregate",
             "group_by",
         }:
 
@@ -822,63 +823,85 @@ class PlanRepair:
         changes: list[str],
         derived_columns: set[str],
     ) -> None:
-
         category_keys = (
+            "group_column",
+            "group_by",
             "group_by_column",
             "groupby_column",
             "category_column",
-            "group_column",
         )
 
-        for key in category_keys:
+        group_key = next(
+            (key for key in category_keys if parameters.get(key)),
+            None,
+        )
 
-            if key in parameters:
-
-                original = parameters[key]
-
-                resolved = self._find_column(
-                    original,
-                    derived_columns,
-                )
-
-                if resolved and resolved != original:
-
-                    parameters[key] = resolved
-
+        if group_key:
+            original = parameters[group_key]
+            resolved = self._find_column(original, derived_columns)
+            if resolved:
+                parameters["group_column"] = resolved
+                if resolved != original or group_key != "group_column":
                     changes.append(
-                        f"Repaired grouping column "
-                        f"'{original}' → '{resolved}'."
+                        f"Repaired grouping column '{original}' -> '{resolved}'."
                     )
+        else:
+            for item in self.schema.get("columns", []):
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
 
-                break
+                dtype = str(item.get("dtype", "")).lower()
+                role = str(item.get("role", "")).lower()
+
+                if (
+                    role in {"categorical", "text", "category"}
+                    or dtype in {"object", "string", "category"}
+                ):
+                    parameters["group_column"] = str(item["name"])
+                    changes.append(
+                        f"Selected grouping column '{item['name']}' "
+                        "because the plan omitted one."
+                    )
+                    break
 
         value_keys = (
             "value_column",
             "metric_column",
             "aggregation_column",
         )
+        value_key = next(
+            (key for key in value_keys if parameters.get(key)),
+            None,
+        )
 
-        for key in value_keys:
+        if value_key:
+            original = parameters[value_key]
+            resolved = self._find_column(original, derived_columns)
+            if resolved:
+                parameters["value_column"] = resolved
+                if resolved != original or value_key != "value_column":
+                    changes.append(
+                        f"Repaired metric column '{original}' -> '{resolved}'."
+                    )
+        else:
+            for item in self.schema.get("columns", []):
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
 
-            if key in parameters:
-
-                original = parameters[key]
-
-                resolved = self._find_column(
-                    original,
-                    derived_columns,
+                dtype = str(item.get("dtype", "")).lower()
+                role = str(item.get("role", "")).lower()
+                is_numeric = (
+                    role in {"numeric", "numeric_discrete"}
+                    or dtype.startswith(("int", "uint", "float"))
                 )
 
-                if resolved and resolved != original:
-
-                    parameters[key] = resolved
-
+                if is_numeric and str(item["name"]) not in derived_columns:
+                    parameters["value_column"] = str(item["name"])
                     changes.append(
-                        f"Repaired metric column "
-                        f"'{original}' → '{resolved}'."
+                        f"Selected numeric metric column '{item['name']}' "
+                        "because the plan omitted one."
                     )
-
-                break
+                    break
 
     def _repair_value_parameter(
         self,
@@ -979,33 +1002,54 @@ class PlanRepair:
         changes: list[str],
         derived_columns: set[str],
     ) -> None:
-
+        # Resolve existing column aliases first.
         for key in (
-            "category_column",
             "column",
+            "category_column",
             "categorical_column",
+            "group_column",
+            "group_by",
         ):
-
-            if key not in parameters:
+            original = parameters.get(key)
+            if not original:
                 continue
 
-            original = parameters[key]
+            resolved = self._find_column(original, derived_columns)
+            if resolved:
+                parameters["column"] = resolved
+                if resolved != original or key != "column":
+                    changes.append(
+                        f"Repaired category column '{original}' -> '{resolved}'."
+                    )
+                return
 
-            resolved = self._find_column(
-                original,
-                derived_columns,
+        # Choose a categorical column if the planner omitted one.
+        for item in self.schema.get("columns", []):
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+
+            name = str(item["name"])
+            dtype = str(item.get("dtype", "")).lower()
+            role = str(item.get("role", "")).lower()
+
+            is_categorical = (
+                role in {"categorical", "text", "category"}
+                or dtype in {"object", "string", "category"}
+                or dtype.startswith("str")
             )
 
-            if resolved and resolved != original:
-
-                parameters[key] = resolved
-
+            if is_categorical:
+                parameters["column"] = name
                 changes.append(
-                    f"Repaired category column "
-                    f"'{original}' → '{resolved}'."
+                    f"Selected categorical column '{name}' because "
+                    "the plan omitted a column."
                 )
+                return
 
-            break
+        changes.append(
+            "Could not repair categorical analysis: no categorical "
+            "column was found in the schema."
+        )
 
     # ------------------------------------------------------------------
     # Advanced analytics
