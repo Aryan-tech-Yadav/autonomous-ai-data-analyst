@@ -430,3 +430,33 @@ def test_duplicate_groupby_and_ranking_insights_are_consolidated():
     assert "group_lowest" not in types
 
     assert result["count"] == 3
+
+
+def test_identifier_column_does_not_generate_dominant_category_insight():
+    detector = InsightDetector()
+
+    execution_results = {
+        "status": "success",
+        "results": [
+            {
+                "operation": "categorical_analysis",
+                "status": "success",
+                "result": {
+                    "operation": "categorical_analysis",
+                    "column": "Order ID",
+                    "counts": {
+                        "ORD-2001": 1,
+                        "ORD-2002": 1,
+                        "ORD-2003": 1,
+                    },
+                },
+            },
+        ],
+    }
+
+    result = detector.detect(execution_results)
+
+    assert not any(
+        insight.get("type") == "dominant_category"
+        for insight in result["insights"]
+    )

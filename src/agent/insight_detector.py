@@ -522,15 +522,25 @@ class InsightDetector:
         result: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
 
-        counts = result.get(
-            "counts",
-            {},
-        )
+        counts = result.get("counts", {})
+        column_name = str(
+            result.get("column", result.get("category_column", ""))
+        ).strip().lower()
 
-        if not isinstance(
-            counts,
-            dict,
-        ) or not counts:
+        # Do not create business insights from identifier-like columns.
+        identifier_names = {
+            "id", "order_id", "customer_id", "transaction_id",
+            "invoice_id", "record_id", "row_id", "uuid",
+        }
+        normalized_name = column_name.replace(" ", "_").replace("-", "_")
+        if (
+            normalized_name in identifier_names
+            or normalized_name.endswith("_id")
+            or normalized_name.startswith("id_")
+        ):
+            return []
+
+        if not isinstance(counts, dict) or not counts:
             return []
 
         valid_counts = []
