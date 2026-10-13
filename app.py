@@ -296,22 +296,19 @@ def extract_insights(result):
 # ============================================================
 
 def render_dataset_health(df):
-    """Render dataset health metrics."""
+    """Render dataset health metrics and missing-data analysis."""
 
-    if df is None or df.empty:
+    if df is None:
         return
 
     rows, columns = df.shape
-
     missing_cells = int(df.isna().sum().sum())
     duplicate_rows = int(df.duplicated().sum())
-
     total_cells = rows * columns
 
     missing_pct = (
         missing_cells / total_cells * 100
-        if total_cells
-        else 0
+        if total_cells else 0.0
     )
 
     st.markdown(
@@ -336,9 +333,145 @@ def render_dataset_health(df):
         )
 
     with c4:
-        st.metric(
-            "Duplicate Rows",
-            f"{duplicate_rows:,}",
+        st.metric("Duplicate Rows", f"{duplicate_rows:,}")
+
+    st.markdown("#### 🩺 Missing Data Analysis")
+
+    if rows == 0 or columns == 0:
+        st.info("Upload a dataset containing rows and columns to analyse data quality.")
+        return
+
+    missing_by_column = df.isna().sum()
+    affected = missing_by_column[missing_by_column > 0]
+
+    if affected.empty:
+        st.success("No missing values found. All dataset cells are populated.")
+    else:
+        missing_report = affected.rename("Missing Values").to_frame()
+        missing_report["Missing Percentage (%)"] = (
+            missing_report["Missing Values"] / rows * 100
+        ).round(2)
+
+        missing_report["Priority"] = missing_report[
+            "Missing Percentage (%)"
+        ].apply(
+            lambda pct: (
+                "High" if pct >= 20
+                else "Medium" if pct >= 5
+                else "Low"
+            )
+        )
+
+        missing_report = missing_report.sort_values(
+            "Missing Percentage (%)",
+            ascending=False,
+        )
+
+        high_priority = int(
+            (missing_report["Priority"] == "High").sum()
+        )
+
+        if high_priority:
+            st.warning(
+                f"{high_priority} column(s) have at least 20% missing values. "
+                "Review these columns before relying on analysis results."
+            )
+        else:
+            st.info(
+                f"{len(missing_report)} column(s) contain missing values. "
+                "Review the report below before interpreting results."
+            )
+
+        st.dataframe(
+            missing_report,
+            width="stretch",
+        )
+
+    if duplicate_rows:
+        st.warning(
+            f"{duplicate_rows:,} duplicate row(s) detected. "
+            "Check whether these are repeated records before removing them."
+        )
+
+
+
+def render_revenue_coverage(df):
+    """Show revenue availability and safely derivable revenue coverage."""
+
+    if df is None or df.empty:
+        return
+
+    def find_column(candidates):
+        normalized = {
+            str(column).strip().lower().replace("_", " "): column
+            for column in df.columns
+        }
+        for candidate in candidates:
+            actual = normalized.get(candidate.lower())
+            if actual is not None:
+                return actual
+        return None
+
+    revenue_col = find_column(["Revenue", "Total Revenue", "Sales Revenue"])
+    units_col = find_column(["Units Sold", "Units", "Quantity"])
+    price_col = find_column(["Unit Price", "Price"])
+
+    st.markdown(
+        '<div class="section-title">💰 Revenue Coverage</div>',
+        unsafe_allow_html=True,
+    )
+
+    if units_col is None or price_col is None:
+        st.info(
+            "Revenue coverage cannot be calculated: the dataset must contain "
+            "a units/quantity column and a unit price column."
+        )
+        return
+
+    import pandas as pd
+
+    units = pd.to_numeric(df[units_col], errors="coerce")
+    price = pd.to_numeric(df[price_col], errors="coerce")
+    derivable = units.notna() & price.notna()
+    calculated = units * price
+
+    if revenue_col is not None:
+        existing = pd.to_numeric(df[revenue_col], errors="coerce")
+        original_available = existing.notna()
+        missing_revenue = ~original_available
+        can_fill = missing_revenue & derivable
+        final_available = original_available | can_fill
+        original_total = float(existing.sum(min_count=1) or 0)
+        calculated_total = float(calculated[can_fill].sum()) if can_fill.any() else 0.0
+        unresolved = int((missing_revenue & ~derivable).sum())
+        calculated_count = int(can_fill.sum())
+    else:
+        original_available = pd.Series(False, index=df.index)
+        can_fill = derivable
+        final_available = derivable
+        original_total = 0.0
+        calculated_total = float(calculated[derivable].sum()) if derivable.any() else 0.0
+        unresolved = int((~derivable).sum())
+        calculated_count = int(derivable.sum())
+
+    coverage = float(final_available.mean() * 100) if len(df) else 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Original Revenue Records", f"{int(original_available.sum()):,}")
+    c2.metric("Calculable Missing Records", f"{calculated_count:,}")
+    c3.metric("Unresolved Records", f"{unresolved:,}")
+    c4.metric("Revenue Coverage", f"{coverage:.1f}%")
+
+    st.caption(
+        f"Potentially derivable revenue: {calculated_total:,.2f}. "
+        "This estimate uses Units × Unit Price only where both values exist. "
+        "Original dataset values are not modified."
+    )
+
+    if unresolved:
+        st.warning(
+            f"{unresolved:,} record(s) still lack enough information to derive "
+            "revenue. Do not interpret the estimate as complete revenue."
         )
 
 
@@ -1026,6 +1159,7 @@ st.caption(
 )
 
 render_dataset_health(df)
+render_revenue_coverage(df)
 
 render_dataset_preview(df)
 

@@ -48,6 +48,7 @@ class OperationExecutor:
         price_column: str = "Unit Price",
         output_column: str = "Revenue",
     ) -> pd.DataFrame:
+        """Preserve existing revenue and calculate only missing values."""
 
         working_df = df.copy()
 
@@ -61,28 +62,27 @@ class OperationExecutor:
                 f"Price column '{price_column}' does not exist."
             )
 
-        if output_column in working_df.columns:
-
-            existing_revenue = pd.to_numeric(
-                working_df[output_column],
-                errors="coerce",
-            )
-
-            if existing_revenue.notna().sum() > 0:
-                working_df[output_column] = existing_revenue
-                return working_df
-
         units = pd.to_numeric(
             working_df[units_column],
             errors="coerce",
         )
-
         price = pd.to_numeric(
             working_df[price_column],
             errors="coerce",
         )
+        calculated_revenue = units * price
 
-        working_df[output_column] = units * price
+        if output_column in working_df.columns:
+            existing_revenue = pd.to_numeric(
+                working_df[output_column],
+                errors="coerce",
+            )
+            working_df[output_column] = existing_revenue.where(
+                existing_revenue.notna(),
+                calculated_revenue,
+            )
+        else:
+            working_df[output_column] = calculated_revenue
 
         return working_df
 
