@@ -460,3 +460,78 @@ def test_identifier_column_does_not_generate_dominant_category_insight():
         insight.get("type") == "dominant_category"
         for insight in result["insights"]
     )
+
+
+
+def test_identifier_variants_do_not_generate_dominant_category_insights():
+    detector = InsightDetector()
+
+    identifier_columns = [
+        "Customer ID",
+        "Transaction ID",
+        "Invoice ID",
+        "record_id",
+        "UUID",
+    ]
+
+    for column in identifier_columns:
+        execution_results = {
+            "status": "success",
+            "results": [
+                {
+                    "operation": "categorical_analysis",
+                    "status": "success",
+                    "result": {
+                        "operation": "categorical_analysis",
+                        "column": column,
+                        "counts": {
+                            "A001": 1,
+                            "A002": 1,
+                            "A003": 1,
+                        },
+                    },
+                },
+            ],
+        }
+
+        result = detector.detect(execution_results)
+
+        assert not any(
+            insight.get("type") == "dominant_category"
+            for insight in result["insights"]
+        ), f"Unexpected identifier insight for {column}"
+
+
+def test_meaningful_category_still_generates_dominant_category_insight():
+    detector = InsightDetector()
+
+    execution_results = {
+        "status": "success",
+        "results": [
+            {
+                "operation": "categorical_analysis",
+                "status": "success",
+                "result": {
+                    "operation": "categorical_analysis",
+                    "column": "Product Category",
+                    "counts": {
+                        "Electronics": 40,
+                        "Furniture": 30,
+                        "Clothing": 20,
+                        "Food": 10,
+                    },
+                },
+            },
+        ],
+    }
+
+    result = detector.detect(execution_results)
+
+    matching = [
+        insight for insight in result["insights"]
+        if insight.get("type") == "dominant_category"
+    ]
+
+    assert matching
+    assert matching[0]["category"] == "Electronics"
+    assert matching[0]["count"] == 40
