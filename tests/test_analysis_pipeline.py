@@ -221,3 +221,85 @@ def test_pipeline_preserves_derived_revenue_repair():
         ranking_step["result"]["value_column"]
         == "Revenue"
     )
+
+
+class FailingPlanner:
+    def create_plan(self, user_query, context, conversation_history=None):
+        raise RuntimeError("Simulated planner failure")
+
+
+class HistoryAwarePlanner:
+    def __init__(self):
+        self.received_history = None
+
+    def create_plan(self, user_query, context, conversation_history=None):
+        self.received_history = conversation_history
+        return json.dumps({
+            "analysis_plan": [
+                {
+                    "step": 1,
+                    "operation": "revenue_calculations",
+                    "parameters": {
+                        "units_column": "Units Sold",
+                        "price_column": "Unit Price",
+                        "output_column": "Revenue",
+                    },
+                }
+            ]
+        })
+
+
+class InvalidResponsePlanner:
+    def create_plan(self, user_query, context, conversation_history=None):
+        return "This is not a valid analysis plan."
+
+
+def test_pipeline_returns_controlled_error_when_planner_fails():
+    pipeline = build_pipeline()
+    pipeline.planner = FailingPlanner()
+
+    result = pipeline.run(
+        df=build_test_dataframe(),
+        user_query="Calculate revenue.",
+    )
+
+    assert result["status"] == "planner_error"
+    assert result["execution"] is None
+    assert result["final_response"] is None
+    assert "Simulated planner failure" in result["error"]
+
+
+def test_pipeline_returns_controlled_error_for_invalid_planner_response():
+    pipeline = build_pipeline()
+    pipeline.planner = InvalidResponsePlanner()
+
+    result = pipeline.run(
+        df=build_test_dataframe(),
+        user_query="Analyze the dataset.",
+    )
+
+    assert result["status"] == "planner_error"
+    assert result["execution"] is None
+    assert result["final_response"] is None
+    assert result["error"]
+
+
+def test_pipeline_passes_conversation_history_to_planner():
+    pipeline = build_pipeline()
+    planner = HistoryAwarePlanner()
+    pipeline.planner = planner
+
+    history = [
+        {"role": "user", "content": "Show revenue by region."},
+        {"role": "assistant", "content": "I will compare the regions."},
+    ]
+
+    result = pipeline.run(
+        df=build_test_dataframe(),
+        user_query="Now calculate total revenue.",
+        conversation_history=history,
+    )
+
+    assert planner.received_history == history
+    assert result["status"] == "success"
+
