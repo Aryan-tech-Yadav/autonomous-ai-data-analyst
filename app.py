@@ -26,70 +26,153 @@ st.markdown(
     """
 <style>
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
         max-width: 1500px;
+        padding-top: 1.5rem;
+        padding-bottom: 3rem;
     }
 
     .hero {
-        padding: 1.5rem 1.75rem;
-        border: 1px solid rgba(128,128,128,.20);
-        border-radius: 18px;
+        padding: 2rem;
+        border: 1px solid rgba(128,128,128,.25);
+        border-radius: 20px;
         margin-bottom: 1.5rem;
+        background: linear-gradient(
+            135deg,
+            rgba(70,100,180,.13),
+            rgba(80,160,150,.07)
+        );
     }
 
     .hero h1 {
-        margin-bottom: .35rem;
-        font-size: 2.25rem;
+        font-size: clamp(1.8rem, 3vw, 2.6rem);
+        font-weight: 800;
+        line-height: 1.2;
+        margin-bottom: .7rem;
     }
 
     .hero p {
-        margin-bottom: 0;
-        opacity: .75;
+        max-width: 850px;
         font-size: 1.05rem;
+        line-height: 1.7;
+        opacity: .8;
+        margin-bottom: 0;
     }
 
     .section-title {
-        font-size: 1.35rem;
-        font-weight: 700;
-        margin-top: 1.25rem;
-        margin-bottom: .75rem;
+        font-size: 1.3rem;
+        font-weight: 750;
+        margin-top: 1.5rem;
+        margin-bottom: .8rem;
+        letter-spacing: -.02em;
     }
 
     .status-card {
-        padding: 1rem 1.1rem;
-        border-radius: 14px;
-        border: 1px solid rgba(128,128,128,.18);
-        min-height: 90px;
+        padding: 1.1rem;
+        border: 1px solid rgba(128,128,128,.22);
+        border-radius: 16px;
+        min-height: 95px;
+        background: rgba(128,128,128,.04);
     }
 
     .status-label {
         font-size: .78rem;
-        opacity: .65;
+        opacity: .7;
         text-transform: uppercase;
-        letter-spacing: .04em;
+        letter-spacing: .06em;
     }
 
     .status-value {
-        font-size: 1.35rem;
-        font-weight: 700;
-        margin-top: .25rem;
+        font-size: 1.4rem;
+        font-weight: 750;
+        margin-top: .35rem;
     }
 
-    .upload-card {
-        padding: 1.25rem;
+    div[data-testid="stFileUploader"] {
+        border: 1px dashed rgba(128,128,128,.4);
         border-radius: 16px;
-        border: 1px dashed rgba(128,128,128,.35);
-        margin-bottom: 1rem;
+        padding: 1rem;
+        background: rgba(128,128,128,.035);
     }
 
-    .small-muted {
-        opacity: .65;
-        font-size: .85rem;
+    div[data-testid="stFileUploader"] section {
+        border: none;
+    }
+
+    div[data-testid="stMetric"] {
+        padding: 1rem;
+        border: 1px solid rgba(128,128,128,.2);
+        border-radius: 14px;
+        background: rgba(128,128,128,.035);
+    }
+
+    div[data-testid="stMetricLabel"] {
+        font-weight: 600;
+    }
+
+    div.stButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+        min-height: 2.6rem;
+        transition: transform .15s ease;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-1px);
     }
 
     div[data-testid="stChatMessage"] {
+        border: 1px solid rgba(128,128,128,.14);
+        border-radius: 16px;
+        padding: 1rem;
+        margin-bottom: .8rem;
+    }
+
+    div[data-testid="stChatInput"] {
         border-radius: 14px;
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid rgba(128,128,128,.18);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    details[data-testid="stExpander"] {
+        border: 1px solid rgba(128,128,128,.18);
+        border-radius: 12px;
+        margin-bottom: .6rem;
+    }
+
+    section[data-testid="stSidebar"] {
+        border-right: 1px solid rgba(128,128,128,.15);
+    }
+
+    .small-muted {
+        opacity: .7;
+        font-size: .85rem;
+    }
+
+    @media (max-width: 768px) {
+        .block-container {
+            padding: 1rem;
+        }
+
+        .hero {
+            padding: 1.25rem;
+            border-radius: 15px;
+        }
+
+        .hero h1 {
+            font-size: 1.8rem;
+        }
+
+        .hero p {
+            font-size: .95rem;
+        }
+
+        .section-title {
+            font-size: 1.15rem;
+        }
     }
 </style>
 """,
@@ -451,19 +534,8 @@ def render_structured_results(result):
             hide_index=True,
         )
 
-    if ranking_rows:
-
-        ranking_df = pd.DataFrame(
-            ranking_rows
-        ).drop_duplicates()
-
-        st.markdown("#### 🏆 Performance Highlights")
-
-        st.dataframe(
-            ranking_df,
-            width="stretch",
-            hide_index=True,
-        )
+    # Ranking results are already shown in the main analysis response.
+    # Avoid rendering the same ranking a second time.
 
     for title, rows in other_tables:
 
@@ -830,9 +902,10 @@ with st.sidebar:
 
         st.markdown("### 💬 Session")
 
-        st.metric(
+        analysis_counter_placeholder = st.empty()
+        analysis_counter_placeholder.metric(
             "Analyses",
-            st.session_state.analysis_count,
+            len(st.session_state.conversation),
         )
 
         if st.button(
@@ -1060,3 +1133,13 @@ if user_query:
     )
 
     st.session_state.analysis_count += 1
+
+    st.toast(
+        f"Analysis #{st.session_state.analysis_count} completed.",
+        icon="✅",
+    )
+
+    analysis_counter_placeholder.metric(
+        "Analyses",
+        len(st.session_state.conversation),
+    )
