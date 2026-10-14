@@ -15,6 +15,8 @@ class NVIDIAClient:
         self.client = OpenAI(
             api_key=self.config.api_key,
             base_url=self.config.base_url,
+            timeout=60.0,
+            max_retries=0,
         )
 
     def generate(

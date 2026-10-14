@@ -903,7 +903,7 @@ def _save_chart(
     fig,
     output_path: str | None = None,
 ) -> str:
-    """Save a chart and always return the actual saved file path."""
+    """Save a chart without overwriting existing automatic filenames."""
 
     if output_path:
         save_path = Path(output_path)
@@ -911,10 +911,20 @@ def _save_chart(
         reports_dir = Path("reports")
         reports_dir.mkdir(parents=True, exist_ok=True)
 
-        existing = list(reports_dir.glob("chart_*.png"))
-        next_number = len(existing) + 1
+        numbers = [
+            int(path.stem[len("chart_"):])
+            for path in reports_dir.glob("chart_*.png")
+            if path.stem[len("chart_"):].isdigit()
+        ]
 
-        save_path = reports_dir / f"chart_{next_number}.png"
+        next_number = max(numbers, default=0) + 1
+        save_path = reports_dir.resolve() / f"chart_{next_number}.png"
+
+        while save_path.exists():
+            next_number += 1
+            save_path = (
+                reports_dir.resolve() / f"chart_{next_number}.png"
+            )
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -925,6 +935,7 @@ def _save_chart(
     )
 
     return str(save_path)
+
 
 
 # ==========================================================
@@ -1027,10 +1038,13 @@ def generate_bar_chart(
 
     fig.tight_layout()
 
-    saved_path = _save_chart(
-        fig,
-        output_path,
-    )
+    try:
+        saved_path = _save_chart(
+            fig,
+            output_path,
+        )
+    finally:
+        plt.close(fig)
 
     chart_data_records = []
 
@@ -1042,8 +1056,6 @@ def generate_bar_chart(
                 "y": float(row[y_column]),
             }
         )
-
-    plt.close(fig)
 
     return {
         "operation": "generate_bar_chart",
@@ -1145,10 +1157,13 @@ def generate_line_chart(
 
     fig.tight_layout()
 
-    saved_path = _save_chart(
-        fig,
-        output_path,
-    )
+    try:
+        saved_path = _save_chart(
+            fig,
+            output_path,
+        )
+    finally:
+        plt.close(fig)
 
     chart_data_records = []
 
@@ -1160,8 +1175,6 @@ def generate_line_chart(
                 "y": float(row[y_column]),
             }
         )
-
-    plt.close(fig)
 
     return {
         "operation": "generate_line_chart",

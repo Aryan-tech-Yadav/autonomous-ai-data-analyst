@@ -13,6 +13,8 @@ class AnthropicClient:
 
         self.client = Anthropic(
             api_key=self.config.api_key,
+            timeout=60.0,
+            max_retries=0,
         )
 
     def generate(
