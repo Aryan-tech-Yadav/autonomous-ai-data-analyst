@@ -15,7 +15,7 @@ class LLMRouter:
     def __init__(
         self,
         max_retries: int = 3,
-        retry_delay: float = 2.0,
+        retry_delay: float = 3.0,
     ):
         self._nvidia = None
         self._anthropic = None
